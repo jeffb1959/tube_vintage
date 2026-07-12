@@ -1,59 +1,63 @@
 # tube_vintage
 
-## Phase 1.4.2
+## Phase 2.0.0
 
-Le démarrage affiche une **indication courte du profil actif**, puis repasse au scintillement normal des 5 LED.
+Cette phase ajoute la connexion Wi‑Fi de manière non bloquante, sans modifier l’animation, le bouton ou les profils visuels.
 
-Les profils disponibles sont :
+Le fichier `main_tempo.py` démarre avec la phase Wi‑Fi active et appelle régulièrement un gestionnaire dédié.
 
-1. `CALME` → LED 1
-2. `VINTAGE_VIVANT` → LED 2
-3. `USE_INSTABLE` → LED 3
-4. `NUIT` → LED 4
+- démarrage d’une tentative immédiate de connexion,
+- en cas d’échec : 5 tentatives rapides (1 minute d’intervalle chacune),
+- puis une stratégie longue : une tentative toutes les 6 heures.
 
-La LED 5 reste réservée au futur profil `NOEL`.
+L’indication de profil (LED 1 à 4) et toutes les animations restent inchangées.
 
-Ordre cyclique des profils :
+## Fichiers créés pour la phase 2.0.0
 
-1. `CALME`
-2. `VINTAGE_VIVANT`
-3. `USE_INSTABLE`
-4. `NUIT`
+- `wifi_secrets.py` : vos identifiants Wi‑Fi locaux.
+- `wifi_secrets.example.py` : modèle sans secret à copier/modifier.
+- `wifi_manager.py` : module dédié à la gestion Wi‑Fi non bloquante.
+- `.gitignore` : protège `wifi_secrets.py` des commits.
 
-Lancement : `ACTIVE_PROFILE` dans `config.py` reste le profil initial au démarrage.
-
-- au démarrage de `main_tempo.py`, le profil actif s'affiche d'abord sur une seule LED (sans couleur spéciale), puis les 5 LED passent à l'animation du profil ;
-- à chaque passage `éteint -> allumé` (bouton), le nouveau profil est d'abord indiqué puis l'affichage normal reprend ;
-- `CTRL+C` demeure réactif et éteint immédiatement les LED ;
-- le bouton reste réactif pendant la phase d'indication.
-
-Paramètre ajustable dans `config.py` :
-
-- `PROFILE_INDICATOR_DURATION_MS` (durée d'indication en ms)
+`wifi_secrets.py` ne doit jamais être envoyé sur GitHub.  
+`wifi_secrets.example.py` ne contient que des valeurs fictives.
 
 ## Démarrage
 
-1. Copier `boot.py`, `config.py` et `main_tempo.py` sur l'ESP32.
-2. Depuis la console MicroPython de Thonny, lancer :
+1. Copier `boot.py`, `config.py`, `main_tempo.py`, `wifi_manager.py`, `wifi_secrets.example.py` sur l’ESP32.
+2. Copier `wifi_secrets.example.py` en `wifi_secrets.py` puis renseigner vos identifiants.
+3. Depuis la console MicroPython de Thonny, lancer :
 
    ```python
    exec(open("main_tempo.py").read())
    ```
 
-3. Vérifier la séquence au démarrage et au rallumage :
-   - LED 1 allumée brièvement pour `CALME`,
-   - LED 2 pour `VINTAGE_VIVANT`,
-   - LED 3 pour `USE_INSTABLE`,
-   - LED 4 pour `NUIT`.
+4. Vérifier en console :
 
-4. Vérifier l'allumage/arrêt par le bouton :
-   - LED éteintes -> appui court : rallume et indique le profil actif,
-   - LED allumées -> appui court : éteint.
+   - `Wi-Fi : tentative de connexion ...`
+   - `Wi-Fi connecté`
+   - `Adresse IP : ...`
 
-5. Vérifier le cycle de profils :
-   `CALME -> VINTAGE_VIVANT -> USE_INSTABLE -> NUIT -> CALME`.
+5. Vérifier :
 
-6. Vérifier `Ctrl+C` : extinction propre.
+   - LED indiquant le profil au démarrage et au passage `éteint -> allumé`,
+   - cycle des profils au rallumage,
+   - bouton et `Ctrl+C` toujours réactifs,
+   - LED continue à fonctionner même sans Wi‑Fi.
+
+## Comportement Wi‑Fi attendu
+
+- Aucun blocage de la boucle principale (pas de `sleep` longs).
+- Une seule tentative active à la fois.
+- `wifi_secrets.py` manquant/incorrect : message clair, animation et bouton restent actifs.
+- Pas de NTP, pas d’API, pas d’horloge ni de planification horaire dans cette phase.
+
+## Détails des délais
+
+- Tentatives rapides max : 5
+- Délai entre tentatives rapides : 60 000 ms (1 minute)
+- Délai de reconnexion longue : 21 600 000 ms (6 heures)
+- Délai maximal d’une tentative individuelle : 15 000 ms
 
 ## Matériel
 
@@ -65,3 +69,4 @@ Paramètre ajustable dans `config.py` :
 - condensateur de 470 µF près de la première LED
 - masse commune entre ESP32, LED et alimentation
 - DATA vers `DIN` de la première LED
+
