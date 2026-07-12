@@ -62,3 +62,45 @@ TARGET_DELAY_MAX_MS = 4200
 # Unite : millisecondes
 # Effet : regle la reactivite de la boucle, notamment pour le bouton.
 LOOP_DELAY_MS = 10
+
+# Valeur par defaut : True
+# Minimum recommande : False
+# Maximum recommande : True
+# Unite : bool
+# Effet : active ou desactive completement le flash bleu-cyan.
+FLASH_ENABLED = True
+
+# Valeur par defaut : 90
+# Minimum recommande : 40
+# Maximum recommande : 180
+# Unite : millisecondes
+# Effet : duree courte du flash ; trop court rend invisible, trop long devient intrusif.
+FLASH_DURATION_MS = 90
+
+# Valeur par defaut : 30000
+# Minimum recommande : 10000
+# Maximum recommande : 60000
+# Unite : millisecondes
+# Effet : attente minimum avant un nouveau flash pour garder un effet rare.
+FLASH_DELAY_MIN_MS = 30000
+
+# Valeur par defaut : 180000
+# Minimum recommande : 60000
+# Maximum recommande : 420000
+# Unite : millisecondes
+# Effet : attente maximum avant un nouveau flash pour un rythme irrégulier et naturel.
+FLASH_DELAY_MAX_MS = 180000
+
+# Valeur par defaut : 60
+# Minimum recommande : 35
+# Maximum recommande : 90
+# Unite : pourcentage
+# Effet : controle la force lumineuse du flash ; plus bas reste tres discret.
+FLASH_INTENSITY = 60
+
+# Valeur par defaut : (35, 6, 22)
+# Minimum recommande : (0, 0, 0)
+# Maximum recommande : (255, 255, 255)
+# Unite : intensite de chaque composante, de 0 a 255 (ordre G, R, B)
+# Effet : couleur bleu-cyan pale du flash, proche d'une variation de tube et non d'un flash moderne.
+FLASH_COLOR = (35, 6, 22)

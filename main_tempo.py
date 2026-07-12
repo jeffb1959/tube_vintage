@@ -6,7 +6,7 @@ import time
 
 
 # Informations du programme
-VERSION = "1.3.0"
+VERSION = "1.3.5"
 
 # Configuration materielle
 DATA_PIN = 5
@@ -110,15 +110,36 @@ def configure_leds_for_turn_on(led_states, now_ms):
         )
 
 
-def apply_led_states(leds, led_states):
+def flash_color():
+    return tuple(
+        max(0, min(255, component * config.FLASH_INTENSITY // 100))
+        for component in config.FLASH_COLOR
+    )
+
+
+def plan_next_flash(now_ms):
+    return time.ticks_add(
+        now_ms,
+        random.randint(config.FLASH_DELAY_MIN_MS, config.FLASH_DELAY_MAX_MS),
+    )
+
+
+def apply_led_states(leds, led_states, flash_state):
+    # Appliquer l'animation normale ou remplacer une LED pendant le flash.
     for index, state in enumerate(led_states):
-        leds[index] = color_from_brightness(state["current_brightness"])
+        if (
+            flash_state["active"]
+            and flash_state["led_index"] == index
+        ):
+            leds[index] = flash_color()
+        else:
+            leds[index] = color_from_brightness(state["current_brightness"])
 
     leds.write()
 
 
 def update_animation_states(led_states, now_ms):
-    # Evolution progressive en douceur de chaque LED de maniere indepedante.
+    # Evolution progressive en douceur de chaque LED de maniere independante.
     changed = False
 
     for state in led_states:
@@ -160,6 +181,12 @@ def update_animation_states(led_states, now_ms):
 
 def main():
     leds = None
+    flash_state = {
+        "active": False,
+        "led_index": -1,
+        "end_ms": 0,
+        "next_ms": None,
+    }
 
     try:
         print("Version :", VERSION)
@@ -172,9 +199,13 @@ def main():
 
         now_ms = time.ticks_ms()
         led_states = [make_led_state(now_ms) for _ in range(LED_COUNT)]
-        apply_led_states(leds, led_states)
+        apply_led_states(leds, led_states, flash_state)
         leds_are_on = True
+        flash_state["next_ms"] = (
+            plan_next_flash(now_ms) if config.FLASH_ENABLED else None
+        )
         print("Les 5 LED ont ete allumees.")
+        print("Flash bleu-cyan : ", "actif" if config.FLASH_ENABLED else "desactive")
 
         previous_button_state = button.value()
         last_button_reading = previous_button_state
@@ -199,20 +230,62 @@ def main():
 
                     if leds_are_on:
                         configure_leds_for_turn_on(led_states, now_ms)
-                        apply_led_states(leds, led_states)
+                        flash_state["active"] = False
+                        flash_state["led_index"] = -1
+                        flash_state["end_ms"] = 0
+                        flash_state["next_ms"] = (
+                            plan_next_flash(now_ms)
+                            if config.FLASH_ENABLED
+                            else None
+                        )
+                        apply_led_states(leds, led_states, flash_state)
                         print("Les 5 LED ont ete allumees.")
                     else:
+                        flash_state["active"] = False
+                        flash_state["led_index"] = -1
+                        flash_state["end_ms"] = 0
+                        flash_state["next_ms"] = None
                         turn_off(leds)
                         print("Les 5 LED ont ete eteintes.")
 
             if leds_are_on:
-                if update_animation_states(led_states, now_ms):
-                    apply_led_states(leds, led_states)
+                flash_updated = False
+
+                if config.FLASH_ENABLED:
+                    if flash_state["active"]:
+                        if time.ticks_diff(now_ms, flash_state["end_ms"]) >= 0:
+                            flash_state["active"] = False
+                            flash_state["led_index"] = -1
+                            flash_state["end_ms"] = 0
+                            flash_state["next_ms"] = plan_next_flash(now_ms)
+                            flash_updated = True
+                    elif flash_state["next_ms"] is not None and (
+                        time.ticks_diff(now_ms, flash_state["next_ms"]) >= 0
+                    ):
+                        flash_state["active"] = True
+                        flash_state["led_index"] = random.randint(0, LED_COUNT - 1)
+                        flash_state["end_ms"] = time.ticks_add(
+                            now_ms, config.FLASH_DURATION_MS
+                        )
+                        flash_updated = True
+                        flash_state["next_ms"] = None
+                        print(
+                            "Flash discret : LED",
+                            flash_state["led_index"],
+                            "active",
+                        )
+
+                animation_updated = update_animation_states(led_states, now_ms)
+                if animation_updated or flash_updated or flash_state["active"]:
+                    apply_led_states(leds, led_states, flash_state)
 
             time.sleep_ms(config.LOOP_DELAY_MS)
 
     except KeyboardInterrupt:
         if leds is not None:
+            # En cas d'interruption, annulation immediate du flash et extinction.
+            flash_state["active"] = False
+            flash_state["led_index"] = -1
             turn_off(leds)
             print("Les 5 LED ont ete eteintes.")
 
@@ -221,6 +294,8 @@ def main():
 
         if leds is not None:
             try:
+                flash_state["active"] = False
+                flash_state["led_index"] = -1
                 turn_off(leds)
                 print("Les 5 LED ont ete eteintes.")
             except Exception as shutdown_error:
