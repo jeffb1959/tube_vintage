@@ -5,10 +5,11 @@ import neopixel
 import random
 import time
 import time_manager
+import schedule_manager
 
 
 # Informations du programme
-VERSION = "2.0.2"
+VERSION = "2.0.3"
 
 # Configuration materielle
 DATA_PIN = 5
@@ -289,6 +290,68 @@ def load_next_profile(current_profile_name, profile_order, led_states, now_ms, f
     return new_profile_name, new_profile
 
 
+def apply_manual_on(
+    leds, led_states, flash_state, indicator_state, profile_name, profile, now_ms
+):
+    print("Profil selectionne :", profile_name)
+    start_profile_indicator(indicator_state, profile_name, now_ms)
+
+    if indicator_state["active"]:
+        print("Indication : LED", indicator_state["led_index"] + 1)
+        apply_profile_indicator(leds, led_states, indicator_state, profile)
+    else:
+        apply_led_states(leds, led_states, flash_state, profile)
+
+    print("LEDs allumees")
+
+
+def apply_manual_off(leds, flash_state, indicator_state):
+    stop_profile_indicator(indicator_state)
+    flash_state["active"] = False
+    flash_state["led_index"] = -1
+    flash_state["end_ms"] = 0
+    flash_state["next_ms"] = None
+    turn_off(leds)
+    print("LEDs eteintes")
+
+
+def apply_auto_on(leds, led_states, flash_state, indicator_state, profile_name, profile, now_ms):
+    flash_state["active"] = False
+    flash_state["led_index"] = -1
+    flash_state["end_ms"] = 0
+    flash_state["next_ms"] = plan_next_flash(now_ms, profile)
+    configure_leds_for_turn_on(led_states, now_ms, profile)
+    start_profile_indicator(indicator_state, profile_name, now_ms)
+    print("Profil selectionne :", profile_name)
+
+    if indicator_state["active"]:
+        print("Indication : LED", indicator_state["led_index"] + 1)
+        apply_profile_indicator(leds, led_states, indicator_state, profile)
+    else:
+        apply_led_states(leds, led_states, flash_state, profile)
+
+    print("LEDs allumees")
+
+
+def apply_auto_off(leds, flash_state, indicator_state):
+    stop_profile_indicator(indicator_state)
+    flash_state["active"] = False
+    flash_state["led_index"] = -1
+    flash_state["end_ms"] = 0
+    flash_state["next_ms"] = None
+    turn_off(leds)
+    print("LEDs eteintes")
+
+
+def print_local_time(local_time):
+    if local_time is None:
+        return
+
+    timezone_mode = time_manager.get_timezone_mode_label()
+    print("Heure locale : " + time_manager.format_time_tuple(local_time))
+    print("Mode horaire : " + timezone_mode)
+
+
 def main():
     leds = None
     flash_state = {
@@ -305,7 +368,7 @@ def main():
 
     try:
         print("Version :", VERSION)
-        print("Phase : 2.0.2")
+        print("Phase : 2.0.3")
         print("Broche DATA : GPIO", DATA_PIN)
         print("Nombre de LED :", LED_COUNT)
         print("Bouton : GPIO", BUTTON_PIN)
@@ -321,6 +384,7 @@ def main():
         now_ms = time.ticks_ms()
         wifi_manager.initialize()
         time_manager.initialize()
+        schedule_manager.initialize()
         led_states = [make_led_state(now_ms, profile) for _ in range(LED_COUNT)]
         flash_state["next_ms"] = plan_next_flash(now_ms, profile)
 
@@ -347,14 +411,46 @@ def main():
                 now_ms, wifi_connected=wifi_manager.is_connected()
             )
 
-            if synced:
+            local_time = None
+            if time_manager.is_time_valid():
                 local_time = time_manager.get_local_time()
-                if local_time is not None:
-                    timezone_mode = time_manager.get_timezone_mode_label()
-                    print(
-                        "Heure locale : " + time_manager.format_time_tuple(local_time)
+                if synced:
+                    print_local_time(local_time)
+
+            schedule_event = schedule_manager.update(
+                local_time,
+                time_manager.is_time_valid(),
+                leds_are_on,
+            )
+
+            if schedule_event is not None and schedule_event["changed"]:
+                if schedule_event["manual_override_cleared"]:
+                    print("Horaire : derogation manuelle annulee")
+
+                if schedule_event["message"] is not None:
+                    print(schedule_event["message"])
+                print(
+                    "Horaire : "
+                    + (
+                        "allumage automatique"
+                        if schedule_event["state_on"]
+                        else "extinction automatique"
                     )
-                    print("Mode horaire : " + timezone_mode)
+                )
+
+                leds_are_on = schedule_event["state_on"]
+                if leds_are_on:
+                    apply_auto_on(
+                        leds,
+                        led_states,
+                        flash_state,
+                        indicator_state,
+                        profile_name,
+                        profile,
+                        now_ms,
+                    )
+                else:
+                    apply_auto_off(leds, flash_state, indicator_state)
 
             button_reading = button.value()
 
@@ -372,34 +468,28 @@ def main():
                     leds_are_on = not leds_are_on
 
                     if not leds_are_on:
-                        stop_profile_indicator(indicator_state)
-                        flash_state["active"] = False
-                        flash_state["led_index"] = -1
-                        flash_state["end_ms"] = 0
-                        flash_state["next_ms"] = None
-                        turn_off(leds)
-                        print("LEDs eteintes")
+                        schedule_manager.set_manual_override(False)
+                        print(
+                            "Horaire : derogation manuelle active jusqu'a la prochaine transition"
+                        )
+                        apply_manual_off(leds, flash_state, indicator_state)
                     else:
+                        schedule_manager.set_manual_override(True)
+                        print(
+                            "Horaire : derogation manuelle active jusqu'a la prochaine transition"
+                        )
                         profile_name, profile = load_next_profile(
                             profile_name, profile_order, led_states, now_ms, flash_state
                         )
-                        start_profile_indicator(indicator_state, profile_name, now_ms)
-                        print("Profil selectionne :", profile_name)
-
-                        if indicator_state["active"]:
-                            print("Indication : LED", indicator_state["led_index"] + 1)
-
-                        if indicator_state["active"]:
-                            apply_profile_indicator(
-                                leds,
-                                led_states,
-                                indicator_state,
-                                profile,
-                            )
-                        else:
-                            apply_led_states(leds, led_states, flash_state, profile)
-
-                        print("LEDs allumees")
+                        apply_manual_on(
+                            leds,
+                            led_states,
+                            flash_state,
+                            indicator_state,
+                            profile_name,
+                            profile,
+                            now_ms,
+                        )
 
             if leds_are_on:
                 animation_updated = False
@@ -448,8 +538,9 @@ def main():
                             flash_state["next_ms"] = None
                             flash_updated = True
 
-                    animation_updated = update_animation_states(led_states, now_ms, profile)
-
+                    animation_updated = update_animation_states(
+                        led_states, now_ms, profile
+                    )
                     if animation_updated or flash_updated or flash_state["active"]:
                         apply_led_states(leds, led_states, flash_state, profile)
 

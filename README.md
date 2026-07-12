@@ -1,96 +1,101 @@
 # tube_vintage
 
-## Phase 2.0.2
+## Phase 2.0.3.1
 
-Cette phase ajoute la conversion locale du QuÃ©bec depuis l'heure UTC de l'ESP32, sans changer le comportement LED ni la logique Wi-Fi.
+Objectif de cette phase : ajouter les minutes a l'horaire automatique tout en conservant le comportement valide.
 
-L'horloge interne reste en UTC.
-L'heure locale n'est calculÃ©e qu'au besoin, avec une rÃ¨gle de dÃ©savancement :
+- Les LEDs s'allument a 06:00.
+- Les LEDs s'eteignent a 00:00.
+- Horaire actif uniquement avec une heure locale valide (`time_manager.py`).
+- Tant que l'heure n'est pas valide, le fonctionnement reste manuel.
+- Comparaison basee sur les minutes depuis minuit :
+  - `minutes_courantes = heure * 60 + minute`
+  - `minutes_debut = heure_debut * 60 + minute_debut`
+  - `minutes_fin = heure_fin * 60 + minute_fin`
 
-- heure normale : UTCâˆ’5
-- heure avancÃ©e : UTCâˆ’4
+Le bouton garde une priorite temporaire :
 
-La conversion utilise les rÃ¨gles rÃ©gionales suivantes :
+- un appui qui eteint cree une derogation manuelle jusqu'a la prochaine transition JOUR/NUIT;
+- un appui qui rallume cree une derogation manuelle jusqu'a la prochaine transition JOUR/NUIT.
 
-- dÃ©but du DST : deuxiÃ¨me dimanche de mars (passage de 1Ã¨re heure vers heure avancÃ©e Ã  2:00 locale),
-- fin du DST : premier dimanche de novembre (retour heure normale Ã  2:00 locale).
+Au passage, la derogation est annulee et l'horaire reprend le controle.
 
-Aucune dÃ©cisions visuelles ne sont basÃ©es automatiquement sur l'heure dans cette phase.
+Comportement conserve :
 
-## Fichiers de la phase 2.0.2
+- changement de profil au rallumage manuel (et seulement alors)
+- indication par LED au rallumage (profil actif)
+- scintillement et flash bleu-cyan inchanges
+- Ctrl+C eteint proprement
+- extinction de securite en cas d'exception
 
-- `wifi_secrets.py` : vos identifiants Wiâ€‘Fi locaux.
-- `wifi_secrets.example.py` : modÃ¨le sans secret Ã  copier/modifier.
-- `wifi_manager.py` : gestion Wiâ€‘Fi non bloquante.
-- `time_manager.py` : synchronisation NTP + conversion UTC vers heure locale du QuÃ©bec.
-- `.gitignore` : protege `wifi_secrets.py` des commits.
+Regles de cette phase :
 
-`wifi_secrets.py` ne doit jamais Ãªtre envoyÃ© sur GitHub.  
-`wifi_secrets.example.py` ne contient que des valeurs fictives.
+- aucune sauvegarde persistante (ni dernier etat, ni derogation)
+- pas de securite de 72h pour cette phase
 
-## DÃ©marrage
+## Fichiers de la phase 2.0.3.1
 
-1. Copier `boot.py`, `config.py`, `main_tempo.py`, `wifi_manager.py`, `time_manager.py`, `wifi_secrets.example.py` sur l'ESP32.
-2. Copier `wifi_secrets.example.py` en `wifi_secrets.py` puis renseigner vos identifiants.
-3. Depuis la console MicroPython de Thonny, lancer :
+- `boot.py` : demarrage MicroPython.
+- `config.py` : profils visuels et parametres d'animation.
+- `main_tempo.py` : logique principale (version, branchements, bouton, LEDs).
+- `schedule_manager.py` : gestion technique de l'horaire 06:00-00:00 et derogation.
+- `wifi_manager.py` : gestion Wi-Fi non bloquante.
+- `time_manager.py` : synchronisation NTP + conversion UTC -> heure locale du Quebec.
+- `wifi_secrets.example.py` : modele d'identifiants Wi-Fi (a copier en `wifi_secrets.py`).
+- `wifi_secrets.py` : identifiants Wi-Fi locaux (a exclure du depot).
+- `.gitignore` : protege `wifi_secrets.py`.
+
+## Demarrage
+
+1. Copier sur l'ESP32 : `boot.py`, `config.py`, `main_tempo.py`, `schedule_manager.py`, `wifi_manager.py`, `time_manager.py`, `wifi_secrets.example.py`.
+2. Copier `wifi_secrets.example.py` en `wifi_secrets.py`.
+3. Depuis la console Thonny :
 
    ```python
    exec(open("main_tempo.py").read())
    ```
 
-4. VÃ©rifier en console aprÃ¨s une synchronisation NTP :
+## Messages console
 
-   - `NTP : synchronisation demandee`
-   - `NTP : synchronisation reussie`
-   - `Heure UTC : YYYY-MM-DD HH:MM:SS UTC`
-   - `Heure locale : YYYY-MM-DD HH:MM:SS`
-   - `Mode horaire : heure avancee, UTC-4` (ou `heure normale, UTC-5`)
+- `Version : 2.0.3` (main_tempo.py)
+- `Phase : 2.0.3.1`
+- `Horaire : periode JOUR` ou `Horaire : periode NUIT`
+- `Horaire : allumage automatique` ou `Horaire : extinction automatique`
+- `Horaire : derogation manuelle active jusqu'a la prochaine transition`
+- `Horaire : derogation manuelle annulee`
 
-5. VÃ©rifier :
+## Test court (facultatif, a retirer ensuite)
 
-   - LEDs et bouton inchangés,
-   - profils inchangÃ©s,
-   - `Ctrl+C` rÃ©actif,
-   - animation continue mÃªme sans Wiâ€‘Fi.
-
-## MÃ©thode de diagnostic (Thonny)
-
-Une fonction permet de vÃ©rifier une conversion UTC sans toucher Ã  l'horloge rÃ©elle :
+Pour verifier rapidement la transition:
 
 ```python
-import time_manager
-time_manager.debug_utc_to_local((2026, 7, 12, 21, 35, 42, 0, 0))
+SCHEDULE_START_HOUR = 17
+SCHEDULE_START_MINUTE = 25
+SCHEDULE_END_HOUR = 17
+SCHEDULE_END_MINUTE = 26
 ```
 
-Elle affiche :
+Attendu:
 
-```text
-Heure UTC : 2026-07-12 21:35:42 UTC
-Heure locale : 2026-07-12 17:35:42
-Mode horaire : heure avancee, UTC-4
+- allumage automatique a 17:25
+- extinction automatique a 17:26
+
+Puis reinstaller les valeurs normales:
+
+```python
+SCHEDULE_START_HOUR = 6
+SCHEDULE_START_MINUTE = 0
+SCHEDULE_END_HOUR = 0
+SCHEDULE_END_MINUTE = 0
 ```
 
-## DÃ©lais Wiâ€‘Fi (phase 2.0.x)
-
-- Tentatives rapides max : 5
-- DÃ©lai entre tentatives rapides : 60 000 ms (1 minute)
-- DÃ©lai de reconnexion longue : 21 600 000 ms (6 heures)
-- DÃ©lai maximal d'une tentative individuelle : 15 000 ms
-
-## DÃ©lais NTP (phase 2.0.2)
-
-- `NTP_POST_CONNECT_DELAY_MS = 3000` ms
-- `NTP_RESYNC_INTERVAL_MS = 21600000` ms (6 heures)
-- `NTP_RETRY_DELAY_MS = 60000` ms (1 minute)
-- `NTP_MIN_VALID_YEAR = 2024`
-
-## MatÃ©riel
+## Materiel
 
 - ESP32 DevKit V1
-- 5 LED WS2812 de 6 mm sur `GPIO 5`
-- bouton poussoir entre `GPIO 27` et `GND` (`PULL_UP`)
-- alimentation 5 V pour les LED
-- rÃ©sistance de 330 Ã  470 Ã sur la ligne DATA
-- condensateur de 470 ÂµF prÃ¨s de la premiÃ¨re LED
-- masse commune entre ESP32, LED et alimentation
-- DATA vers `DIN` de la premiÃ¨re LED
+- 5 LED WS2812 de 6 mm sur GPIO 5
+- bouton poussoir entre GPIO 27 et GND (PULL_UP)
+- alimentation 5V pour les LED
+- resistance 330-470 ohms sur la ligne DATA
+- condensateur 470 uF pres de la premiere LED
+- masse commune ESP32 / LED / alimentation
+- DATA vers DIN de la premiere LED
