@@ -6,7 +6,7 @@ import time
 
 
 # Informations du programme
-VERSION = "1.4.0.1"
+VERSION = "1.4.1"
 
 # Configuration materielle
 DATA_PIN = 5
@@ -17,16 +17,48 @@ BUTTON_PIN = 27
 DEBOUNCE_MS = 50
 
 
-def get_profile():
+def get_profile_order():
+    profile_order = getattr(config, "PROFILE_ORDER", tuple(config.PROFILES.keys()))
+    filtered_order = [name for name in profile_order if name in config.PROFILES]
+
+    if not filtered_order:
+        return ("CALME",)
+
+    return tuple(filtered_order)
+
+
+def resolve_profile(requested_profile):
+    profile_order = get_profile_order()
+
+    if requested_profile in config.PROFILES and requested_profile in profile_order:
+        return requested_profile
+
+    fallback = profile_order[0] if profile_order else "CALME"
+
+    if requested_profile not in config.PROFILES:
+        print("Profil inconnu :", requested_profile, "- retour a", fallback)
+    elif requested_profile not in profile_order:
+        print("Profil non present dans PROFILE_ORDER :", requested_profile, "- retour a", fallback)
+
+    return fallback
+
+
+def get_initial_profile():
     requested_profile = getattr(config, "ACTIVE_PROFILE", "CALME")
-    profiles = getattr(config, "PROFILES", {})
+    profile_name = resolve_profile(requested_profile)
+    return profile_name, config.PROFILES[profile_name]
 
-    if requested_profile in profiles:
-        print("Profil actif :", requested_profile)
-        return requested_profile, profiles[requested_profile]
 
-    print("Profil actif inconnu :", requested_profile, "- utilisation de CALME")
-    return "CALME", profiles.get("CALME", {})
+def next_profile_name(current_profile_name, profile_order):
+    if current_profile_name not in profile_order:
+        return profile_order[0]
+
+    current_index = profile_order.index(current_profile_name)
+    return profile_order[(current_index + 1) % len(profile_order)]
+
+
+def load_profile(profile_name):
+    return config.PROFILES[profile_name]
 
 
 def color_from_brightness(brightness, warm_orange):
@@ -34,16 +66,6 @@ def color_from_brightness(brightness, warm_orange):
         max(0, min(255, component * brightness // 100))
         for component in warm_orange
     )
-
-
-def turn_on(leds, brightness, warm_orange):
-    # Meme couleur appliquee aux 5 LED avec une seule valeur de luminosite.
-    color = color_from_brightness(brightness, warm_orange)
-
-    for index in range(LED_COUNT):
-        leds[index] = color
-
-    leds.write()
 
 
 def turn_off(leds):
@@ -54,7 +76,6 @@ def turn_off(leds):
 
 
 def pick_target_brightness(excluded_brightness, profile):
-    # Force un changement de cible pour conserver une animation non bloquee.
     target = random.randint(profile["BRIGHTNESS_MIN"], profile["BRIGHTNESS_MAX"])
 
     if target == excluded_brightness:
@@ -66,7 +87,6 @@ def pick_target_brightness(excluded_brightness, profile):
 
 
 def pick_transition_step(profile):
-    # Rend la vitesse de chaque tube differente sans changer l'esprit du scintillement.
     transition_step = profile["TRANSITION_STEP"]
 
     if transition_step <= 1:
@@ -76,7 +96,6 @@ def pick_transition_step(profile):
 
 
 def pick_transition_interval(profile):
-    # Introduit une duree de pas propre a chaque LED et chaque changement.
     jitter = random.randint(-30, 30)
     return max(20, profile["TRANSITION_INTERVAL_MS"] + jitter)
 
@@ -92,11 +111,10 @@ def make_led_state(now_ms, profile):
         profile["INITIAL_BRIGHTNESS"] - 6,
         profile["INITIAL_BRIGHTNESS"] + 6,
     )
+
     return {
         "current_brightness": current_brightness,
-        "target_brightness": pick_target_brightness(
-            current_brightness, profile
-        ),
+        "target_brightness": pick_target_brightness(current_brightness, profile),
         "step": pick_transition_step(profile),
         "interval_ms": pick_transition_interval(profile),
         "last_transition_ms": now_ms,
@@ -111,7 +129,6 @@ def make_led_state(now_ms, profile):
 
 
 def configure_leds_for_turn_on(led_states, now_ms, profile):
-    # Redemarrage doux apres un appui court sur le bouton.
     for state in led_states:
         state["current_brightness"] = safe_rand(
             profile["BRIGHTNESS_MIN"],
@@ -140,16 +157,19 @@ def flash_color(profile):
 
 
 def plan_next_flash(now_ms, profile):
+    if not profile["FLASH_ENABLED"]:
+        return None
+
     return time.ticks_add(
         now_ms,
         random.randint(
-            profile["FLASH_DELAY_MIN_MS"], profile["FLASH_DELAY_MAX_MS"]
+            profile["FLASH_DELAY_MIN_MS"],
+            profile["FLASH_DELAY_MAX_MS"],
         ),
     )
 
 
 def apply_led_states(leds, led_states, flash_state, profile):
-    # Appliquer l'animation normale ou remplacer une LED pendant le flash.
     for index, state in enumerate(led_states):
         if (
             flash_state["active"]
@@ -166,7 +186,6 @@ def apply_led_states(leds, led_states, flash_state, profile):
 
 
 def update_animation_states(led_states, now_ms, profile):
-    # Evolution progressive en douceur de chaque LED de maniere independante.
     changed = False
 
     for state in led_states:
@@ -209,6 +228,19 @@ def update_animation_states(led_states, now_ms, profile):
     return changed
 
 
+def load_next_profile(current_profile_name, profile_order, led_states, now_ms, flash_state):
+    new_profile_name = next_profile_name(current_profile_name, profile_order)
+    new_profile = load_profile(new_profile_name)
+
+    flash_state["active"] = False
+    flash_state["led_index"] = -1
+    flash_state["end_ms"] = 0
+
+    configure_leds_for_turn_on(led_states, now_ms, new_profile)
+    flash_state["next_ms"] = plan_next_flash(now_ms, new_profile)
+    return new_profile_name, new_profile
+
+
 def main():
     leds = None
     flash_state = {
@@ -224,7 +256,9 @@ def main():
         print("Nombre de LED :", LED_COUNT)
         print("Bouton : GPIO", BUTTON_PIN)
 
-        profile_name, profile = get_profile()
+        profile_order = get_profile_order()
+        profile_name, profile = get_initial_profile()
+
         print("Profil visuel actif :", profile_name)
 
         leds = neopixel.NeoPixel(Pin(DATA_PIN, Pin.OUT), LED_COUNT)
@@ -232,16 +266,12 @@ def main():
 
         now_ms = time.ticks_ms()
         led_states = [make_led_state(now_ms, profile) for _ in range(LED_COUNT)]
+        flash_state["next_ms"] = plan_next_flash(now_ms, profile)
         apply_led_states(leds, led_states, flash_state, profile)
+
         leds_are_on = True
-        flash_state["next_ms"] = (
-            plan_next_flash(now_ms, profile) if profile["FLASH_ENABLED"] else None
-        )
-        print("Les 5 LED ont ete allumees.")
-        print(
-            "Flash bleu-cyan :",
-            "actif" if profile["FLASH_ENABLED"] else "desactive",
-        )
+        print("LEDs allumees")
+        print("Profil selectionne :", profile_name)
 
         previous_button_state = button.value()
         last_button_reading = previous_button_state
@@ -264,25 +294,20 @@ def main():
                 if previous_button_state == 0:
                     leds_are_on = not leds_are_on
 
-                    if leds_are_on:
-                        configure_leds_for_turn_on(led_states, now_ms, profile)
-                        flash_state["active"] = False
-                        flash_state["led_index"] = -1
-                        flash_state["end_ms"] = 0
-                        flash_state["next_ms"] = (
-                            plan_next_flash(now_ms, profile)
-                            if profile["FLASH_ENABLED"]
-                            else None
-                        )
-                        apply_led_states(leds, led_states, flash_state, profile)
-                        print("Les 5 LED ont ete allumees.")
-                    else:
+                    if not leds_are_on:
                         flash_state["active"] = False
                         flash_state["led_index"] = -1
                         flash_state["end_ms"] = 0
                         flash_state["next_ms"] = None
                         turn_off(leds)
-                        print("Les 5 LED ont ete eteintes.")
+                        print("LEDs eteintes")
+                    else:
+                        profile_name, profile = load_next_profile(
+                            profile_name, profile_order, led_states, now_ms, flash_state
+                        )
+                        apply_led_states(leds, led_states, flash_state, profile)
+                        print("Profil selectionne :", profile_name)
+                        print("LEDs allumees")
 
             if leds_are_on:
                 flash_updated = False
@@ -301,15 +326,11 @@ def main():
                         flash_state["active"] = True
                         flash_state["led_index"] = random.randint(0, LED_COUNT - 1)
                         flash_state["end_ms"] = time.ticks_add(
-                            now_ms, profile["FLASH_DURATION_MS"]
+                            now_ms,
+                            profile["FLASH_DURATION_MS"],
                         )
-                        flash_updated = True
                         flash_state["next_ms"] = None
-                        print(
-                            "Flash discret : LED",
-                            flash_state["led_index"],
-                            "active",
-                        )
+                        flash_updated = True
 
                 animation_updated = update_animation_states(led_states, now_ms, profile)
                 if animation_updated or flash_updated or flash_state["active"]:
@@ -319,11 +340,10 @@ def main():
 
     except KeyboardInterrupt:
         if leds is not None:
-            # En cas d'interruption, annulation immediate du flash et extinction.
             flash_state["active"] = False
             flash_state["led_index"] = -1
             turn_off(leds)
-            print("Les 5 LED ont ete eteintes.")
+            print("LEDs eteintes")
 
     except Exception as error:
         print("Erreur :", error)
@@ -333,7 +353,7 @@ def main():
                 flash_state["active"] = False
                 flash_state["led_index"] = -1
                 turn_off(leds)
-                print("Les 5 LED ont ete eteintes.")
+                print("LEDs eteintes")
             except Exception as shutdown_error:
                 print("Erreur pendant l'extinction :", shutdown_error)
 

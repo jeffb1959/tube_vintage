@@ -3,6 +3,14 @@
 # Si un nom invalide est saisi, le programme revient automatiquement Ã  "CALME".
 ACTIVE_PROFILE = "CALME"
 
+# Ordre cyclique de transition entre profils lors du rallumage.
+PROFILE_ORDER = (
+    "CALME",
+    "VINTAGE_VIVANT",
+    "USE_INSTABLE",
+    "NUIT",
+)
+
 # Chaque profil doit exposer exactement les mÃªmes clÃ©s pour garder une seule logique d'animation.
 #
 # CALME :
