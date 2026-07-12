@@ -1,0 +1,12 @@
+{
+  "include": [
+    "**/*.py"
+  ],
+  "exclude": [
+    "node_modules"
+  ],
+  "stubPath": "typings",
+  "reportMissingImports": false,
+  "reportMissingModuleSource": false,
+  "pythonVersion": "3.10"
+}

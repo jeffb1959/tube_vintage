@@ -158,7 +158,7 @@ def update(local_time, time_valid, current_leds_on):
 
     manual_cleared = clear_manual_override()
 
-    if previous_period == PERIOD_NUIT and current_period == PERIOD_DAY:
+    if previous_period == PERIOD_NIGHT and current_period == PERIOD_DAY:
         return _build_event(
             True,
             current_period,
@@ -166,7 +166,7 @@ def update(local_time, time_valid, current_leds_on):
             manual_cleared=manual_cleared,
         )
 
-    if previous_period == PERIOD_DAY and current_period == PERIOD_NUIT:
+    if previous_period == PERIOD_DAY and current_period == PERIOD_NIGHT:
         return _build_event(
             False,
             current_period,

@@ -1,0 +1,25 @@
+{
+  "name": "projet-tube_a_vide",
+  "version": "1.0.0",
+  "description": "Objectif de cette phase : ajouter les minutes a l'horaire automatique tout en conservant le comportement valide.",
+  "main": "index.js",
+  "scripts": {
+    "check": "pyright",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jeffb1959/tube_vintage.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/jeffb1959/tube_vintage/issues"
+  },
+  "homepage": "https://github.com/jeffb1959/tube_vintage#readme",
+  "devDependencies": {
+    "pyright": "^1.1.411"
+  }
+}
