@@ -4,10 +4,11 @@ import wifi_manager
 import neopixel
 import random
 import time
+import time_manager
 
 
 # Informations du programme
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 
 # Configuration materielle
 DATA_PIN = 5
@@ -304,7 +305,7 @@ def main():
 
     try:
         print("Version :", VERSION)
-        print("Phase Wi-Fi : 2.0.0 active")
+        print("Phase : 2.0.1")
         print("Broche DATA : GPIO", DATA_PIN)
         print("Nombre de LED :", LED_COUNT)
         print("Bouton : GPIO", BUTTON_PIN)
@@ -319,6 +320,7 @@ def main():
 
         now_ms = time.ticks_ms()
         wifi_manager.initialize()
+        time_manager.initialize()
         led_states = [make_led_state(now_ms, profile) for _ in range(LED_COUNT)]
         flash_state["next_ms"] = plan_next_flash(now_ms, profile)
 
@@ -341,6 +343,7 @@ def main():
         while True:
             now_ms = time.ticks_ms()
             wifi_manager.update(now_ms)
+            time_manager.update(now_ms, wifi_connected=wifi_manager.is_connected())
             button_reading = button.value()
 
             if button_reading != last_button_reading:

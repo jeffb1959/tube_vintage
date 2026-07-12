@@ -1,22 +1,25 @@
 # tube_vintage
 
-## Phase 2.0.0
+## Phase 2.0.1
 
-Cette phase ajoute la connexion Wi‑Fi de manière non bloquante, sans modifier l’animation, le bouton ou les profils visuels.
+Cette phase ajoute une synchronisation horaire NTP en UTC, sans changer le comportement lumineux ni le bouton.
 
-Le fichier `main_tempo.py` démarre avec la phase Wi‑Fi active et appelle régulièrement un gestionnaire dédié.
+Le fichier `main_tempo.py` démarre toujours le Wi‑Fi non bloquant puis appelle `time_manager` pour synchroniser l'heure.
 
-- démarrage d’une tentative immédiate de connexion,
-- en cas d’échec : 5 tentatives rapides (1 minute d’intervalle chacune),
-- puis une stratégie longue : une tentative toutes les 6 heures.
+- synchronisation demandée peu après la connexion Wi‑Fi,
+- resynchronisation automatique toutes les 6 heures,
+- réessai toutes les 60 secondes en cas d'échec,
+- pas de conversion de fuseau local (UTC uniquement),
+- pas de dépendance externe ni de planification avancée.
 
-L’indication de profil (LED 1 à 4) et toutes les animations restent inchangées.
+L'animation, l'indicateur de profil (LED 1 à 4), le flash bleu‑cyan et `Ctrl+C` restent inchangés.
 
-## Fichiers créés pour la phase 2.0.0
+## Fichiers de la phase 2.0.1
 
 - `wifi_secrets.py` : vos identifiants Wi‑Fi locaux.
 - `wifi_secrets.example.py` : modèle sans secret à copier/modifier.
-- `wifi_manager.py` : module dédié à la gestion Wi‑Fi non bloquante.
+- `wifi_manager.py` : gestion Wi‑Fi non bloquante.
+- `time_manager.py` : gestion NTP non bloquante (UTC).
 - `.gitignore` : protège `wifi_secrets.py` des commits.
 
 `wifi_secrets.py` ne doit jamais être envoyé sur GitHub.  
@@ -24,7 +27,7 @@ L’indication de profil (LED 1 à 4) et toutes les animations restent inchangé
 
 ## Démarrage
 
-1. Copier `boot.py`, `config.py`, `main_tempo.py`, `wifi_manager.py`, `wifi_secrets.example.py` sur l’ESP32.
+1. Copier `boot.py`, `config.py`, `main_tempo.py`, `wifi_manager.py`, `time_manager.py`, `wifi_secrets.example.py` sur l'ESP32.
 2. Copier `wifi_secrets.example.py` en `wifi_secrets.py` puis renseigner vos identifiants.
 3. Depuis la console MicroPython de Thonny, lancer :
 
@@ -37,27 +40,30 @@ L’indication de profil (LED 1 à 4) et toutes les animations restent inchangé
    - `Wi-Fi : tentative de connexion ...`
    - `Wi-Fi connecté`
    - `Adresse IP : ...`
+   - `NTP : synchronisation demandee`
+   - `NTP : synchronisation reussie`
+   - `Heure UTC : ... UTC`
 
 5. Vérifier :
 
    - LED indiquant le profil au démarrage et au passage `éteint -> allumé`,
-   - cycle des profils au rallumage,
-   - bouton et `Ctrl+C` toujours réactifs,
-   - LED continue à fonctionner même sans Wi‑Fi.
+   - profil qui change correctement au rallumage,
+   - bouton et `Ctrl+C` réactifs,
+   - animation continue même sans Wi‑Fi.
 
-## Comportement Wi‑Fi attendu
-
-- Aucun blocage de la boucle principale (pas de `sleep` longs).
-- Une seule tentative active à la fois.
-- `wifi_secrets.py` manquant/incorrect : message clair, animation et bouton restent actifs.
-- Pas de NTP, pas d’API, pas d’horloge ni de planification horaire dans cette phase.
-
-## Détails des délais
+## Détails des délais Wi‑Fi (phase 2.0.x)
 
 - Tentatives rapides max : 5
 - Délai entre tentatives rapides : 60 000 ms (1 minute)
 - Délai de reconnexion longue : 21 600 000 ms (6 heures)
-- Délai maximal d’une tentative individuelle : 15 000 ms
+- Délai maximal d'une tentative individuelle : 15 000 ms
+
+## Détails des délais NTP (phase 2.0.1)
+
+- `NTP_POST_CONNECT_DELAY_MS = 3000` ms
+- `NTP_RESYNC_INTERVAL_MS = 21600000` ms (6 heures)
+- `NTP_RETRY_DELAY_MS = 60000` ms (1 minute)
+- `NTP_MIN_VALID_YEAR = 2024` (validation minimale)
 
 ## Matériel
 
@@ -69,4 +75,3 @@ L’indication de profil (LED 1 à 4) et toutes les animations restent inchangé
 - condensateur de 470 µF près de la première LED
 - masse commune entre ESP32, LED et alimentation
 - DATA vers `DIN` de la première LED
-
