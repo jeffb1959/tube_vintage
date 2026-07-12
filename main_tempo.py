@@ -8,7 +8,7 @@ import time_manager
 
 
 # Informations du programme
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 
 # Configuration materielle
 DATA_PIN = 5
@@ -305,7 +305,7 @@ def main():
 
     try:
         print("Version :", VERSION)
-        print("Phase : 2.0.1")
+        print("Phase : 2.0.2")
         print("Broche DATA : GPIO", DATA_PIN)
         print("Nombre de LED :", LED_COUNT)
         print("Bouton : GPIO", BUTTON_PIN)
@@ -343,7 +343,19 @@ def main():
         while True:
             now_ms = time.ticks_ms()
             wifi_manager.update(now_ms)
-            time_manager.update(now_ms, wifi_connected=wifi_manager.is_connected())
+            synced = time_manager.update(
+                now_ms, wifi_connected=wifi_manager.is_connected()
+            )
+
+            if synced:
+                local_time = time_manager.get_local_time()
+                if local_time is not None:
+                    timezone_mode = time_manager.get_timezone_mode_label()
+                    print(
+                        "Heure locale : " + time_manager.format_time_tuple(local_time)
+                    )
+                    print("Mode horaire : " + timezone_mode)
+
             button_reading = button.value()
 
             if button_reading != last_button_reading:

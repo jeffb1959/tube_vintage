@@ -1,31 +1,34 @@
 # tube_vintage
 
-## Phase 2.0.1
+## Phase 2.0.2
 
-Cette phase ajoute une synchronisation horaire NTP en UTC, sans changer le comportement lumineux ni le bouton.
+Cette phase ajoute la conversion locale du QuÃ©bec depuis l'heure UTC de l'ESP32, sans changer le comportement LED ni la logique Wi-Fi.
 
-Le fichier `main_tempo.py` démarre toujours le Wi‑Fi non bloquant puis appelle `time_manager` pour synchroniser l'heure.
+L'horloge interne reste en UTC.
+L'heure locale n'est calculÃ©e qu'au besoin, avec une rÃ¨gle de dÃ©savancement :
 
-- synchronisation demandée peu après la connexion Wi‑Fi,
-- resynchronisation automatique toutes les 6 heures,
-- réessai toutes les 60 secondes en cas d'échec,
-- pas de conversion de fuseau local (UTC uniquement),
-- pas de dépendance externe ni de planification avancée.
+- heure normale : UTCâˆ’5
+- heure avancÃ©e : UTCâˆ’4
 
-L'animation, l'indicateur de profil (LED 1 à 4), le flash bleu‑cyan et `Ctrl+C` restent inchangés.
+La conversion utilise les rÃ¨gles rÃ©gionales suivantes :
 
-## Fichiers de la phase 2.0.1
+- dÃ©but du DST : deuxiÃ¨me dimanche de mars (passage de 1Ã¨re heure vers heure avancÃ©e Ã  2:00 locale),
+- fin du DST : premier dimanche de novembre (retour heure normale Ã  2:00 locale).
 
-- `wifi_secrets.py` : vos identifiants Wi‑Fi locaux.
-- `wifi_secrets.example.py` : modèle sans secret à copier/modifier.
-- `wifi_manager.py` : gestion Wi‑Fi non bloquante.
-- `time_manager.py` : gestion NTP non bloquante (UTC).
-- `.gitignore` : protège `wifi_secrets.py` des commits.
+Aucune dÃ©cisions visuelles ne sont basÃ©es automatiquement sur l'heure dans cette phase.
 
-`wifi_secrets.py` ne doit jamais être envoyé sur GitHub.  
+## Fichiers de la phase 2.0.2
+
+- `wifi_secrets.py` : vos identifiants Wiâ€‘Fi locaux.
+- `wifi_secrets.example.py` : modÃ¨le sans secret Ã  copier/modifier.
+- `wifi_manager.py` : gestion Wiâ€‘Fi non bloquante.
+- `time_manager.py` : synchronisation NTP + conversion UTC vers heure locale du QuÃ©bec.
+- `.gitignore` : protege `wifi_secrets.py` des commits.
+
+`wifi_secrets.py` ne doit jamais Ãªtre envoyÃ© sur GitHub.  
 `wifi_secrets.example.py` ne contient que des valeurs fictives.
 
-## Démarrage
+## DÃ©marrage
 
 1. Copier `boot.py`, `config.py`, `main_tempo.py`, `wifi_manager.py`, `time_manager.py`, `wifi_secrets.example.py` sur l'ESP32.
 2. Copier `wifi_secrets.example.py` en `wifi_secrets.py` puis renseigner vos identifiants.
@@ -35,43 +38,59 @@ L'animation, l'indicateur de profil (LED 1 à 4), le flash bleu‑cyan et `Ctrl+
    exec(open("main_tempo.py").read())
    ```
 
-4. Vérifier en console :
+4. VÃ©rifier en console aprÃ¨s une synchronisation NTP :
 
-   - `Wi-Fi : tentative de connexion ...`
-   - `Wi-Fi connecté`
-   - `Adresse IP : ...`
    - `NTP : synchronisation demandee`
    - `NTP : synchronisation reussie`
-   - `Heure UTC : ... UTC`
+   - `Heure UTC : YYYY-MM-DD HH:MM:SS UTC`
+   - `Heure locale : YYYY-MM-DD HH:MM:SS`
+   - `Mode horaire : heure avancee, UTC-4` (ou `heure normale, UTC-5`)
 
-5. Vérifier :
+5. VÃ©rifier :
 
-   - LED indiquant le profil au démarrage et au passage `éteint -> allumé`,
-   - profil qui change correctement au rallumage,
-   - bouton et `Ctrl+C` réactifs,
-   - animation continue même sans Wi‑Fi.
+   - LEDs et bouton inchangés,
+   - profils inchangÃ©s,
+   - `Ctrl+C` rÃ©actif,
+   - animation continue mÃªme sans Wiâ€‘Fi.
 
-## Détails des délais Wi‑Fi (phase 2.0.x)
+## MÃ©thode de diagnostic (Thonny)
+
+Une fonction permet de vÃ©rifier une conversion UTC sans toucher Ã  l'horloge rÃ©elle :
+
+```python
+import time_manager
+time_manager.debug_utc_to_local((2026, 7, 12, 21, 35, 42, 0, 0))
+```
+
+Elle affiche :
+
+```text
+Heure UTC : 2026-07-12 21:35:42 UTC
+Heure locale : 2026-07-12 17:35:42
+Mode horaire : heure avancee, UTC-4
+```
+
+## DÃ©lais Wiâ€‘Fi (phase 2.0.x)
 
 - Tentatives rapides max : 5
-- Délai entre tentatives rapides : 60 000 ms (1 minute)
-- Délai de reconnexion longue : 21 600 000 ms (6 heures)
-- Délai maximal d'une tentative individuelle : 15 000 ms
+- DÃ©lai entre tentatives rapides : 60 000 ms (1 minute)
+- DÃ©lai de reconnexion longue : 21 600 000 ms (6 heures)
+- DÃ©lai maximal d'une tentative individuelle : 15 000 ms
 
-## Détails des délais NTP (phase 2.0.1)
+## DÃ©lais NTP (phase 2.0.2)
 
 - `NTP_POST_CONNECT_DELAY_MS = 3000` ms
 - `NTP_RESYNC_INTERVAL_MS = 21600000` ms (6 heures)
 - `NTP_RETRY_DELAY_MS = 60000` ms (1 minute)
-- `NTP_MIN_VALID_YEAR = 2024` (validation minimale)
+- `NTP_MIN_VALID_YEAR = 2024`
 
-## Matériel
+## MatÃ©riel
 
 - ESP32 DevKit V1
 - 5 LED WS2812 de 6 mm sur `GPIO 5`
 - bouton poussoir entre `GPIO 27` et `GND` (`PULL_UP`)
 - alimentation 5 V pour les LED
-- résistance de 330 à 470 Ω sur la ligne DATA
-- condensateur de 470 µF près de la première LED
+- rÃ©sistance de 330 Ã  470 Ã sur la ligne DATA
+- condensateur de 470 ÂµF prÃ¨s de la premiÃ¨re LED
 - masse commune entre ESP32, LED et alimentation
-- DATA vers `DIN` de la première LED
+- DATA vers `DIN` de la premiÃ¨re LED
