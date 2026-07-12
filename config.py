@@ -1,38 +1,3 @@
-# Valeur par defaut : "1.2.1"
-# Minimum recommande : version actuelle du programme
-# Maximum recommande : version actuelle du programme
-# Unite : aucune
-# Effet : identifie la version affichee dans la console.
-VERSION = "1.2.1"
-
-# Valeur par defaut : 5
-# Minimum recommande : 0
-# Maximum recommande : 33
-# Unite : numero GPIO
-# Effet : choisit la broche qui envoie les donnees aux LED WS2812.
-DATA_PIN = 5
-
-# Valeur par defaut : 5
-# Minimum recommande : 1
-# Maximum recommande : 100
-# Unite : LED
-# Effet : indique combien de LED WS2812 recoivent la couleur commune.
-LED_COUNT = 5
-
-# Valeur par defaut : 27
-# Minimum recommande : 0
-# Maximum recommande : 33
-# Unite : numero GPIO
-# Effet : choisit la broche du bouton relie a GND avec PULL_UP interne.
-BUTTON_PIN = 27
-
-# Valeur par defaut : 50
-# Minimum recommande : 20
-# Maximum recommande : 100
-# Unite : millisecondes
-# Effet : filtre les rebonds mecaniques du bouton.
-DEBOUNCE_MS = 50
-
 # Valeur par defaut : (3, 12, 0)
 # Minimum recommande : (0, 0, 0)
 # Maximum recommande : (255, 255, 255)
@@ -47,7 +12,7 @@ WARM_ORANGE = (3, 12, 0)
 # Maximum recommande : 200
 # Unite : pourcentage de la couleur de base
 # Effet : fixe la luminosite la plus basse du scintillement sans eteindre.
-BRIGHTNESS_MIN = 131
+BRIGHTNESS_MIN = 110
 
 # Valeur par defaut : 193
 # Minimum recommande : 75
@@ -61,7 +26,7 @@ BRIGHTNESS_MAX = 193
 # Maximum recommande : 255
 # Unite : pourcentage de la couleur de base
 # Effet : fixe la luminosite utilisee au lancement du programme.
-INITIAL_BRIGHTNESS = 175
+INITIAL_BRIGHTNESS = 130
 
 # Valeur par defaut : 1
 # Minimum recommande : 1
@@ -75,21 +40,21 @@ TRANSITION_STEP = 1
 # Maximum recommande : 500
 # Unite : millisecondes
 # Effet : regle le temps entre deux petits pas de luminosite.
-TRANSITION_INTERVAL_MS = 80
+TRANSITION_INTERVAL_MS = 150
 
 # Valeur par defaut : 400
 # Minimum recommande : 200
 # Maximum recommande : 2000
 # Unite : millisecondes
 # Effet : fixe l'attente aleatoire minimale avant une nouvelle cible.
-TARGET_DELAY_MIN_MS = 400
+TARGET_DELAY_MIN_MS = 1000
 
 # Valeur par defaut : 1600
 # Minimum recommande : 500
 # Maximum recommande : 5000
 # Unite : millisecondes
 # Effet : fixe l'attente aleatoire maximale avant une nouvelle cible.
-TARGET_DELAY_MAX_MS = 1600
+TARGET_DELAY_MAX_MS = 4200
 
 # Valeur par defaut : 10
 # Minimum recommande : 5

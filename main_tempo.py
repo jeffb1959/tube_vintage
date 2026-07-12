@@ -5,6 +5,18 @@ import random
 import time
 
 
+# Informations du programme
+VERSION = "1.2.2"
+
+# Configuration materielle
+DATA_PIN = 5
+LED_COUNT = 5
+
+# Configuration du bouton
+BUTTON_PIN = 27
+DEBOUNCE_MS = 50
+
+
 def turn_on(leds, brightness):
     # La même couleur ajustée est envoyée aux cinq LED.
     color = tuple(
@@ -12,14 +24,14 @@ def turn_on(leds, brightness):
         for component in config.WARM_ORANGE
     )
 
-    for index in range(config.LED_COUNT):
+    for index in range(LED_COUNT):
         leds[index] = color
 
     leds.write()
 
 
 def turn_off(leds):
-    for index in range(config.LED_COUNT):
+    for index in range(LED_COUNT):
         leds[index] = (0, 0, 0)
 
     leds.write()
@@ -29,15 +41,13 @@ def main():
     leds = None
 
     try:
-        print("Version :", config.VERSION)
-        print("Broche DATA : GPIO", config.DATA_PIN)
-        print("Nombre de LED :", config.LED_COUNT)
-        print("Bouton : GPIO", config.BUTTON_PIN)
+        print("Version :", VERSION)
+        print("Broche DATA : GPIO", DATA_PIN)
+        print("Nombre de LED :", LED_COUNT)
+        print("Bouton : GPIO", BUTTON_PIN)
 
-        leds = neopixel.NeoPixel(
-            Pin(config.DATA_PIN, Pin.OUT), config.LED_COUNT
-        )
-        button = Pin(config.BUTTON_PIN, Pin.IN, Pin.PULL_UP)
+        leds = neopixel.NeoPixel(Pin(DATA_PIN, Pin.OUT), LED_COUNT)
+        button = Pin(BUTTON_PIN, Pin.IN, Pin.PULL_UP)
 
         current_brightness = config.INITIAL_BRIGHTNESS
         target_brightness = current_brightness
@@ -67,7 +77,7 @@ def main():
             if (
                 button_reading != previous_button_state
                 and time.ticks_diff(current_time, last_change_time)
-                >= config.DEBOUNCE_MS
+                >= DEBOUNCE_MS
             ):
                 previous_button_state = button_reading
 

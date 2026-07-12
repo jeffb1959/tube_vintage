@@ -1,6 +1,6 @@
 # tube_vintage
 
-## Phase 1.2.1
+## Phase 1.2.2
 
 Cette phase valide le fonctionnement de cinq LED WS2812 et ajoute leur commande
 marche/arrêt par bouton avec un ESP32 DevKit V1 sous MicroPython. Les cinq LED
@@ -14,12 +14,15 @@ conservant la même teinte et la même amplitude relative de scintillement.
 ## Structure du projet
 
 - `boot.py` affiche le message de démarrage MicroPython ;
-- `main_tempo.py` contient la logique du programme lancé manuellement ;
-- `config.py` centralise les réglages matériels, visuels et temporels.
+- `main_tempo.py` contient la logique, la version et les paramètres matériels ;
+- `config.py` contient seulement les réglages visuels et d'animation.
 
 Dans `config.py`, chaque paramètre indique sa valeur par défaut, sa plage
 recommandée, son unité lorsqu'elle existe et son effet. Les réglages peuvent
 ainsi être ajustés sans modifier la logique de `main_tempo.py`.
+
+La phase 1.2.2 réorganise uniquement la configuration : aucun comportement
+lumineux n'a changé.
 
 ## Matériel
 
