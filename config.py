@@ -1,6 +1,6 @@
-# ACTIVE_PROFILE choisit le jeu de constantes visuelles utilisÃ© au dÃ©marrage.
+# ACTIVE_PROFILE choisit le jeu de constantes visuelles utilisÃƒÂ© au dÃƒÂ©marrage.
 # Options disponibles : "CALME", "VINTAGE_VIVANT", "USE_INSTABLE", "NUIT".
-# Si un nom invalide est saisi, le programme revient automatiquement Ã  "CALME".
+# Si un nom invalide est saisi, le programme revient automatiquement ÃƒÂ  "CALME".
 ACTIVE_PROFILE = "CALME"
 
 # Ordre cyclique de transition entre profils lors du rallumage.
@@ -11,10 +11,18 @@ PROFILE_ORDER = (
     "NUIT",
 )
 
+# DurÃ©e de l'indication du profil au dÃ©marrage et au rallumage.
+# Valeur par dÃ©faut recommandÃ©e : 1000
+# Minimum recommandÃ© : 300
+# Maximum recommandÃ© : 3000
+# Unite : millisecondes
+# Effet : affichage d'une seule LED indicatrice pendant la durÃ©e, puis retour au mode normal.
+PROFILE_INDICATOR_DURATION_MS = 1000
+
 # Chaque profil doit exposer exactement les mÃªmes clÃ©s pour garder une seule logique d'animation.
 #
 # CALME :
-# Profil de rÃ©fÃ©rence. Il reproduit exactement le rendu actuel aprÃ¨s les ajustements utilisateurs.
+# Profil de rÃ©fÃ©rence. Il reproduit exactement le rÃ©sultat actuel aprÃ¨s les ajustements utilisateurs.
 #
 # VINTAGE_VIVANT :
 # LÃ©gÃ¨rement plus lumineuse et plus animÃ©e que CALME, toujours sans brutalitÃ©.

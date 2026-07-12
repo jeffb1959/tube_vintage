@@ -1,8 +1,17 @@
 # tube_vintage
 
-## Phase 1.4.1
+## Phase 1.4.2
 
-Le bouton change maintenant le profil visuel uniquement à la relance des LED.
+Le démarrage affiche une **indication courte du profil actif**, puis repasse au scintillement normal des 5 LED.
+
+Les profils disponibles sont :
+
+1. `CALME` → LED 1
+2. `VINTAGE_VIVANT` → LED 2
+3. `USE_INSTABLE` → LED 3
+4. `NUIT` → LED 4
+
+La LED 5 reste réservée au futur profil `NOEL`.
 
 Ordre cyclique des profils :
 
@@ -13,13 +22,14 @@ Ordre cyclique des profils :
 
 Lancement : `ACTIVE_PROFILE` dans `config.py` reste le profil initial au démarrage.
 
-- bouton appui lorsque LED allumées -> LED éteintes
-- bouton appui lorsque LED éteintes -> profil suivant puis LED allumées
+- au démarrage de `main_tempo.py`, le profil actif s'affiche d'abord sur une seule LED (sans couleur spéciale), puis les 5 LED passent à l'animation du profil ;
+- à chaque passage `éteint -> allumé` (bouton), le nouveau profil est d'abord indiqué puis l'affichage normal reprend ;
+- `CTRL+C` demeure réactif et éteint immédiatement les LED ;
+- le bouton reste réactif pendant la phase d'indication.
 
-Le profil ne change que sur cette transition `éteint -> allumé`.  
-Aucune persistance de profil n’est faite pour l’instant.
+Paramètre ajustable dans `config.py` :
 
-L’indication visuelle du profil par LED est prévue en phase 1.4.2.
+- `PROFILE_INDICATOR_DURATION_MS` (durée d'indication en ms)
 
 ## Démarrage
 
@@ -30,9 +40,19 @@ L’indication visuelle du profil par LED est prévue en phase 1.4.2.
    exec(open("main_tempo.py").read())
    ```
 
-3. Vérifier le profil initial affiché au démarrage.
-4. Vérifier la séquence de bouton : éteindre puis rallumer pour changer de profil.
-5. Vérifier le cycle `CALME -> VINTAGE_VIVANT -> USE_INSTABLE -> NUIT -> CALME`.
+3. Vérifier la séquence au démarrage et au rallumage :
+   - LED 1 allumée brièvement pour `CALME`,
+   - LED 2 pour `VINTAGE_VIVANT`,
+   - LED 3 pour `USE_INSTABLE`,
+   - LED 4 pour `NUIT`.
+
+4. Vérifier l'allumage/arrêt par le bouton :
+   - LED éteintes -> appui court : rallume et indique le profil actif,
+   - LED allumées -> appui court : éteint.
+
+5. Vérifier le cycle de profils :
+   `CALME -> VINTAGE_VIVANT -> USE_INSTABLE -> NUIT -> CALME`.
+
 6. Vérifier `Ctrl+C` : extinction propre.
 
 ## Matériel

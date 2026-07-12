@@ -6,7 +6,7 @@ import time
 
 
 # Informations du programme
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 
 # Configuration materielle
 DATA_PIN = 5
@@ -38,7 +38,12 @@ def resolve_profile(requested_profile):
     if requested_profile not in config.PROFILES:
         print("Profil inconnu :", requested_profile, "- retour a", fallback)
     elif requested_profile not in profile_order:
-        print("Profil non present dans PROFILE_ORDER :", requested_profile, "- retour a", fallback)
+        print(
+            "Profil non present dans PROFILE_ORDER :",
+            requested_profile,
+            "- retour a",
+            fallback,
+        )
 
     return fallback
 
@@ -128,6 +133,50 @@ def make_led_state(now_ms, profile):
     }
 
 
+def get_indicator_led_index(profile_name):
+    return {
+        "CALME": 0,
+        "VINTAGE_VIVANT": 1,
+        "USE_INSTABLE": 2,
+        "NUIT": 3,
+    }.get(profile_name, -1)
+
+
+def start_profile_indicator(indicator_state, profile_name, now_ms):
+    indicator_state["led_index"] = get_indicator_led_index(profile_name)
+    indicator_state["active"] = indicator_state["led_index"] >= 0
+
+    if indicator_state["active"]:
+        indicator_state["end_ms"] = time.ticks_add(
+            now_ms,
+            config.PROFILE_INDICATOR_DURATION_MS,
+        )
+    else:
+        indicator_state["end_ms"] = 0
+
+
+def stop_profile_indicator(indicator_state):
+    indicator_state["active"] = False
+    indicator_state["led_index"] = -1
+    indicator_state["end_ms"] = 0
+
+
+def apply_profile_indicator(leds, led_states, indicator_state, profile):
+    indicator_led = indicator_state["led_index"]
+    indicator_color = color_from_brightness(
+        led_states[indicator_led]["current_brightness"],
+        profile["WARM_ORANGE"],
+    )
+
+    for index in range(LED_COUNT):
+        if index == indicator_led:
+            leds[index] = indicator_color
+        else:
+            leds[index] = (0, 0, 0)
+
+    leds.write()
+
+
 def configure_leds_for_turn_on(led_states, now_ms, profile):
     for state in led_states:
         state["current_brightness"] = safe_rand(
@@ -171,10 +220,7 @@ def plan_next_flash(now_ms, profile):
 
 def apply_led_states(leds, led_states, flash_state, profile):
     for index, state in enumerate(led_states):
-        if (
-            flash_state["active"]
-            and flash_state["led_index"] == index
-        ):
+        if flash_state["active"] and flash_state["led_index"] == index:
             leds[index] = flash_color(profile)
         else:
             leds[index] = color_from_brightness(
@@ -249,6 +295,11 @@ def main():
         "end_ms": 0,
         "next_ms": None,
     }
+    indicator_state = {
+        "active": False,
+        "led_index": -1,
+        "end_ms": 0,
+    }
 
     try:
         print("Version :", VERSION)
@@ -267,11 +318,18 @@ def main():
         now_ms = time.ticks_ms()
         led_states = [make_led_state(now_ms, profile) for _ in range(LED_COUNT)]
         flash_state["next_ms"] = plan_next_flash(now_ms, profile)
-        apply_led_states(leds, led_states, flash_state, profile)
+
+        start_profile_indicator(indicator_state, profile_name, now_ms)
 
         leds_are_on = True
         print("LEDs allumees")
         print("Profil selectionne :", profile_name)
+
+        if indicator_state["active"]:
+            print("Indication : LED", indicator_state["led_index"] + 1)
+            apply_profile_indicator(leds, led_states, indicator_state, profile)
+        else:
+            apply_led_states(leds, led_states, flash_state, profile)
 
         previous_button_state = button.value()
         last_button_reading = previous_button_state
@@ -295,6 +353,7 @@ def main():
                     leds_are_on = not leds_are_on
 
                     if not leds_are_on:
+                        stop_profile_indicator(indicator_state)
                         flash_state["active"] = False
                         flash_state["led_index"] = -1
                         flash_state["end_ms"] = 0
@@ -305,36 +364,75 @@ def main():
                         profile_name, profile = load_next_profile(
                             profile_name, profile_order, led_states, now_ms, flash_state
                         )
-                        apply_led_states(leds, led_states, flash_state, profile)
+                        start_profile_indicator(indicator_state, profile_name, now_ms)
                         print("Profil selectionne :", profile_name)
+
+                        if indicator_state["active"]:
+                            print("Indication : LED", indicator_state["led_index"] + 1)
+
+                        if indicator_state["active"]:
+                            apply_profile_indicator(
+                                leds,
+                                led_states,
+                                indicator_state,
+                                profile,
+                            )
+                        else:
+                            apply_led_states(leds, led_states, flash_state, profile)
+
                         print("LEDs allumees")
 
             if leds_are_on:
+                animation_updated = False
                 flash_updated = False
 
-                if profile["FLASH_ENABLED"]:
-                    if flash_state["active"]:
-                        if time.ticks_diff(now_ms, flash_state["end_ms"]) >= 0:
-                            flash_state["active"] = False
-                            flash_state["led_index"] = -1
-                            flash_state["end_ms"] = 0
-                            flash_state["next_ms"] = plan_next_flash(now_ms, profile)
-                            flash_updated = True
-                    elif flash_state["next_ms"] is not None and (
-                        time.ticks_diff(now_ms, flash_state["next_ms"]) >= 0
-                    ):
-                        flash_state["active"] = True
-                        flash_state["led_index"] = random.randint(0, LED_COUNT - 1)
-                        flash_state["end_ms"] = time.ticks_add(
-                            now_ms,
-                            profile["FLASH_DURATION_MS"],
-                        )
-                        flash_state["next_ms"] = None
-                        flash_updated = True
+                if indicator_state["active"]:
+                    if time.ticks_diff(now_ms, indicator_state["end_ms"]) >= 0:
+                        stop_profile_indicator(indicator_state)
 
-                animation_updated = update_animation_states(led_states, now_ms, profile)
-                if animation_updated or flash_updated or flash_state["active"]:
-                    apply_led_states(leds, led_states, flash_state, profile)
+                        if (
+                            flash_state["next_ms"] is not None
+                            and time.ticks_diff(now_ms, flash_state["next_ms"]) >= 0
+                        ):
+                            flash_state["next_ms"] = plan_next_flash(now_ms, profile)
+
+                        apply_led_states(leds, led_states, flash_state, profile)
+                    else:
+                        animation_updated = update_animation_states(
+                            led_states, now_ms, profile
+                        )
+                        if animation_updated:
+                            apply_profile_indicator(
+                                leds,
+                                led_states,
+                                indicator_state,
+                                profile,
+                            )
+                else:
+                    if profile["FLASH_ENABLED"]:
+                        if flash_state["active"]:
+                            if time.ticks_diff(now_ms, flash_state["end_ms"]) >= 0:
+                                flash_state["active"] = False
+                                flash_state["led_index"] = -1
+                                flash_state["end_ms"] = 0
+                                flash_state["next_ms"] = plan_next_flash(now_ms, profile)
+                                flash_updated = True
+                        elif flash_state["next_ms"] is not None and (
+                            time.ticks_diff(now_ms, flash_state["next_ms"]) >= 0
+                        ):
+                            flash_state["active"] = True
+                            flash_state["led_index"] = random.randint(0, LED_COUNT - 1)
+                            flash_state["end_ms"] = time.ticks_add(
+                                now_ms,
+                                profile["FLASH_DURATION_MS"],
+                            )
+                            flash_state["next_ms"] = None
+                            flash_updated = True
+
+                    animation_updated = update_animation_states(led_states, now_ms, profile)
+
+                    if animation_updated or flash_updated or flash_state["active"]:
+                        apply_led_states(leds, led_states, flash_state, profile)
 
             time.sleep_ms(profile["LOOP_DELAY_MS"])
 
@@ -342,6 +440,7 @@ def main():
         if leds is not None:
             flash_state["active"] = False
             flash_state["led_index"] = -1
+            stop_profile_indicator(indicator_state)
             turn_off(leds)
             print("LEDs eteintes")
 
@@ -352,6 +451,7 @@ def main():
             try:
                 flash_state["active"] = False
                 flash_state["led_index"] = -1
+                stop_profile_indicator(indicator_state)
                 turn_off(leds)
                 print("LEDs eteintes")
             except Exception as shutdown_error:
