@@ -7,10 +7,13 @@ import time
 import time_manager
 import schedule_manager
 import time_safety
+import sun_manager
+import night_profile_manager
+import updater
 
 
 # Informations du programme
-VERSION = "2.0.4.1"
+PROGRAM_VERSION = "3.0.0"
 
 # Configuration materielle
 DATA_PIN = 5
@@ -368,16 +371,18 @@ def main():
     }
 
     try:
-        print("Version :", VERSION)
-        print("Phase : 2.0.4.1")
+        print("Version :", PROGRAM_VERSION)
+        print("Phase : 3.0.0")
         print("Broche DATA : GPIO", DATA_PIN)
         print("Nombre de LED :", LED_COUNT)
         print("Bouton : GPIO", BUTTON_PIN)
 
         profile_order = get_profile_order()
-        profile_name, profile = get_initial_profile()
+        user_profile_name, user_profile = get_initial_profile()
+        effective_profile_name = user_profile_name
+        effective_profile = user_profile
 
-        print("Profil visuel actif :", profile_name)
+        print("Profil utilisateur :", user_profile_name)
 
         leds = neopixel.NeoPixel(Pin(DATA_PIN, Pin.OUT), LED_COUNT)
         button = Pin(BUTTON_PIN, Pin.IN, Pin.PULL_UP)
@@ -387,20 +392,27 @@ def main():
         time_manager.initialize()
         schedule_manager.initialize()
         time_safety.initialize(now_ms)
-        led_states = [make_led_state(now_ms, profile) for _ in range(LED_COUNT)]
-        flash_state["next_ms"] = plan_next_flash(now_ms, profile)
+        sun_manager.initialize()
+        night_profile_manager.initialize()
+        updater.initialize(PROGRAM_VERSION)
+        led_states = [
+            make_led_state(now_ms, effective_profile) for _ in range(LED_COUNT)
+        ]
+        flash_state["next_ms"] = plan_next_flash(now_ms, effective_profile)
 
-        start_profile_indicator(indicator_state, profile_name, now_ms)
+        start_profile_indicator(indicator_state, effective_profile_name, now_ms)
 
         leds_are_on = True
         print("LEDs allumees")
-        print("Profil selectionne :", profile_name)
+        print("Profil selectionne :", effective_profile_name)
 
         if indicator_state["active"]:
             print("Indication : LED", indicator_state["led_index"] + 1)
-            apply_profile_indicator(leds, led_states, indicator_state, profile)
+            apply_profile_indicator(
+                leds, led_states, indicator_state, effective_profile
+            )
         else:
-            apply_led_states(leds, led_states, flash_state, profile)
+            apply_led_states(leds, led_states, flash_state, effective_profile)
 
         previous_button_state = button.value()
         last_button_reading = previous_button_state
@@ -410,6 +422,7 @@ def main():
             now_ms = time.ticks_ms()
             force_schedule_realign = False
             wifi_manager.update(now_ms)
+            updater.update(now_ms, wifi_manager.is_connected())
             synced = time_manager.update(
                 now_ms, wifi_connected=wifi_manager.is_connected()
             )
@@ -436,6 +449,75 @@ def main():
             elif time_safety.update(now_ms):
                 leds_are_on = False
                 apply_auto_off(leds, flash_state, indicator_state)
+
+            local_date = None
+            if local_time is not None:
+                local_date = tuple(local_time[:3])
+
+            if sun_manager.update(
+                now_ms,
+                wifi_manager.is_connected(),
+                time_manager.is_time_valid(),
+                local_date,
+            ):
+                sunset = sun_manager.get_sunset()
+                if sunset is not None:
+                    sunset_date = sunset["date"]
+                    print(
+                        "Soleil : coucher du %04d-%02d-%02d a %02d:%02d"
+                        % (
+                            sunset_date[0],
+                            sunset_date[1],
+                            sunset_date[2],
+                            sunset["hour"],
+                            sunset["minute"],
+                        )
+                    )
+
+            sunset = sun_manager.get_sunset()
+            night_event = night_profile_manager.update(local_time, sunset)
+            if night_event is not None:
+                effective_profile_name = night_profile_manager.get_effective_profile(
+                    user_profile_name
+                )
+                effective_profile = load_profile(effective_profile_name)
+
+                if night_event == "started":
+                    print(
+                        "Profil nuit : profil utilisateur conserve : "
+                        + user_profile_name
+                    )
+                elif night_event == "ended":
+                    print(
+                        "Profil nuit : retour au profil utilisateur : "
+                        + user_profile_name
+                    )
+
+                if (
+                    night_event == "started"
+                    and leds_are_on
+                    and not time_safety.is_locked()
+                ):
+                    apply_auto_on(
+                        leds,
+                        led_states,
+                        flash_state,
+                        indicator_state,
+                        effective_profile_name,
+                        effective_profile,
+                        now_ms,
+                    )
+                else:
+                    stop_profile_indicator(indicator_state)
+                    flash_state["active"] = False
+                    flash_state["led_index"] = -1
+                    flash_state["end_ms"] = 0
+                    configure_leds_for_turn_on(
+                        led_states, now_ms, effective_profile
+                    )
+                    flash_state["next_ms"] = plan_next_flash(
+                        now_ms, effective_profile
+                    )
 
             schedule_current_leds_on = leds_are_on
             if force_schedule_realign:
@@ -475,8 +557,8 @@ def main():
                         led_states,
                         flash_state,
                         indicator_state,
-                        profile_name,
-                        profile,
+                        effective_profile_name,
+                        effective_profile,
                         now_ms,
                     )
                 else:
@@ -512,16 +594,23 @@ def main():
                         print(
                             "Horaire : derogation manuelle active jusqu'a la prochaine transition"
                         )
-                        profile_name, profile = load_next_profile(
-                            profile_name, profile_order, led_states, now_ms, flash_state
-                        )
+                        if not night_profile_manager.is_auto_night_active():
+                            user_profile_name, user_profile = load_next_profile(
+                                user_profile_name,
+                                profile_order,
+                                led_states,
+                                now_ms,
+                                flash_state,
+                            )
+                            effective_profile_name = user_profile_name
+                            effective_profile = user_profile
                         apply_manual_on(
                             leds,
                             led_states,
                             flash_state,
                             indicator_state,
-                            profile_name,
-                            profile,
+                            effective_profile_name,
+                            effective_profile,
                             now_ms,
                         )
 
@@ -537,28 +626,34 @@ def main():
                             flash_state["next_ms"] is not None
                             and time.ticks_diff(now_ms, flash_state["next_ms"]) >= 0
                         ):
-                            flash_state["next_ms"] = plan_next_flash(now_ms, profile)
+                            flash_state["next_ms"] = plan_next_flash(
+                                now_ms, effective_profile
+                            )
 
-                        apply_led_states(leds, led_states, flash_state, profile)
+                        apply_led_states(
+                            leds, led_states, flash_state, effective_profile
+                        )
                     else:
                         animation_updated = update_animation_states(
-                            led_states, now_ms, profile
+                            led_states, now_ms, effective_profile
                         )
                         if animation_updated:
                             apply_profile_indicator(
                                 leds,
                                 led_states,
                                 indicator_state,
-                                profile,
+                                effective_profile,
                             )
                 else:
-                    if profile["FLASH_ENABLED"]:
+                    if effective_profile["FLASH_ENABLED"]:
                         if flash_state["active"]:
                             if time.ticks_diff(now_ms, flash_state["end_ms"]) >= 0:
                                 flash_state["active"] = False
                                 flash_state["led_index"] = -1
                                 flash_state["end_ms"] = 0
-                                flash_state["next_ms"] = plan_next_flash(now_ms, profile)
+                                flash_state["next_ms"] = plan_next_flash(
+                                    now_ms, effective_profile
+                                )
                                 flash_updated = True
                         elif flash_state["next_ms"] is not None and (
                             time.ticks_diff(now_ms, flash_state["next_ms"]) >= 0
@@ -567,18 +662,20 @@ def main():
                             flash_state["led_index"] = random.randint(0, LED_COUNT - 1)
                             flash_state["end_ms"] = time.ticks_add(
                                 now_ms,
-                                profile["FLASH_DURATION_MS"],
+                                effective_profile["FLASH_DURATION_MS"],
                             )
                             flash_state["next_ms"] = None
                             flash_updated = True
 
                     animation_updated = update_animation_states(
-                        led_states, now_ms, profile
+                        led_states, now_ms, effective_profile
                     )
                     if animation_updated or flash_updated or flash_state["active"]:
-                        apply_led_states(leds, led_states, flash_state, profile)
+                        apply_led_states(
+                            leds, led_states, flash_state, effective_profile
+                        )
 
-            time.sleep_ms(profile["LOOP_DELAY_MS"])
+            time.sleep_ms(effective_profile["LOOP_DELAY_MS"])
 
     except KeyboardInterrupt:
         if leds is not None:

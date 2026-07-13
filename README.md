@@ -1,123 +1,149 @@
 # tube_vintage
 
-## Phase 2.0.4.1
+## Phase 3.0.0
 
-Cette phase conserve la securite temporelle de 72 heures tout en autorisant le
-fonctionnement immediat des LED au demarrage, meme sans Wi-Fi et sans heure NTP.
+Cette phase ajoute une premiere verification de version depuis un manifeste
+statique publie sur Netlify. L'ESP32 consulte et valide `version.json`, compare
+sa version locale a la version distante et indique si une mise a jour existe.
 
-Au lancement :
+Aucun fichier de programme n'est telecharge, ecrit, renomme ou installe dans
+cette phase. Aucun redemarrage n'est effectue.
 
-- le profil initial et son indication sont affiches immediatement;
-- le scintillement, le flash du profil et le bouton fonctionnent normalement;
-- le changement de profil reste disponible lors d'un rallumage manuel;
-- les tentatives Wi-Fi et NTP continuent en arriere-plan;
-- une periode de grace locale de 72 heures commence avec `ticks_ms()`.
+## Configuration Netlify
 
-Tant qu'aucune synchronisation NTP n'a reussi, l'horaire automatique de 06:00 a
-00:00 reste desactive. Le programme fonctionne manuellement et ne tente pas de
-deduire l'heure locale d'une RTC non validee.
+L'URL technique se trouve dans `updater.py` :
 
-## Premiere synchronisation et fonctionnement normal
+```python
+VERSION_MANIFEST_URL = "https://votre-site.netlify.app/version.json"
+```
 
-La premiere synchronisation NTP reussie met fin a la periode de grace monotone,
-enregistre le timestamp UTC et active l'horaire automatique. L'ancienne
-derogation manuelle est annulee et l'etat des LED est realigne une seule fois
-sur l'horaire courant, sans changer ni avancer le profil utilisateur.
+Remplacer explicitement `votre-site.netlify.app` par le domaine Netlify reel
+avant le deploiement. Cette URL ne doit pas etre placee dans `config.py`.
 
-Apres cette premiere synchronisation, l'age de la derniere synchronisation est
-calcule avec les secondes UTC. L'horloge interne permet de conserver l'horaire,
-les profils et les derogations pendant au maximum 72 heures sans nouvelle
-synchronisation. `ticks_ms()` n'est alors plus la reference de cette limite.
+Le dossier local `netlify/` prepare la future publication :
 
-## Verrouillage
+```text
+netlify/
+|-- version.json
+|-- README.md
+`-- firmware/
+    `-- README.md
+```
 
-Lorsque la periode de grace initiale expire, ou lorsque la derniere
-synchronisation UTC atteint 72 heures :
+## Manifeste
 
-- les cinq LED sont immediatement eteintes;
-- le flash et l'indication de profil sont annules;
-- le bouton ne peut ni rallumer les LED ni changer le profil;
-- le profil utilisateur courant est conserve;
-- les tentatives Wi-Fi et NTP continuent normalement.
-
-Seule une nouvelle synchronisation NTP valide leve le verrouillage. Elle met a
-jour l'etat persistant, annule toute ancienne derogation et realigne les LED sur
-l'horaire avec le profil deja selectionne.
-
-## Persistance
-
-`time_safety.py` lit `time_state.json` au demarrage et l'ecrit uniquement apres
-une synchronisation NTP reussie :
+L'exemple `netlify/version.json` contient :
 
 ```json
 {
-  "version": 1,
-  "last_ntp_sync_utc": 1783891200
+  "manifest_version": 1,
+  "version": "3.0.0",
+  "files": [
+    {
+      "name": "main.py",
+      "url": "https://votre-site.netlify.app/firmware/main.py",
+      "size": 0,
+      "sha256": ""
+    },
+    {
+      "name": "config.py",
+      "url": "https://votre-site.netlify.app/firmware/config.py",
+      "size": 0,
+      "sha256": ""
+    }
+  ]
 }
 ```
 
-Le fichier conserve une trace de la derniere synchronisation, mais son contenu
-ne bloque pas les LED et ne sert pas a appliquer l'horaire avant qu'une heure
-valide ait ete obtenue dans la session courante.
+Pour cette phase, `manifest_version` doit valoir `1`, `version` doit etre une
+version numerique valide et `files`, si present, doit etre une liste de
+dictionnaires. `size` et `sha256` ne sont pas encore verifies.
 
-L'ecriture complete passe d'abord par `time_state.tmp`. L'ancien fichier final
-est ensuite supprime avec prudence, puis le fichier temporaire est renomme en
-`time_state.json`. Un fichier absent ou invalide et une erreur d'ecriture sont
-geres sans interrompre les LED.
+## Verification et comparaison
 
-## Limite acceptee apres un redemarrage complet
+Apres une nouvelle connexion Wi-Fi, `updater.py` attend 15 secondes avec une
+echeance monotone avant de consulter Netlify. Ce delai espace la requete des
+operations NTP et Open-Meteo.
 
-La periode initiale utilise le compteur monotone de l'ESP32. Apres une coupure
-complete, `ticks_ms()` repart a zero : si le Wi-Fi reste indisponible, une
-nouvelle periode de grace de 72 heures commence. Cette limite est acceptee pour
-ce projet, car la television est normalement alimentee en permanence. Aucun
-module RTC externe ni calcul fragile du temps passe hors alimentation n'est
-ajoute.
+- apres une verification reussie, la suivante est planifiee dans 24 heures;
+- apres un echec reseau, HTTP ou JSON, un nouvel essai est planifie dans une
+  heure;
+- la reponse HTTP est fermee dans tous les cas;
+- tout l'etat reste uniquement en RAM.
 
-## Diagnostics acceleres
+Les versions sont converties en trois entiers `(majeur, mineur, correctif)` et
+ne sont jamais comparees comme de simples chaines. Ainsi `3.0.10` est bien
+superieur a `3.0.9`. Une version incomplete, non numerique ou comportant un
+nombre different de composantes invalide le manifeste.
 
-Les fonctions suivantes modifient uniquement l'etat en RAM et ne changent pas
-la limite de production `72 * 60 * 60` :
+Une version distante superieure est seulement annoncee et memorisee en RAM.
+Les LED, le bouton, les profils et tous les gestionnaires continuent leur
+fonctionnement normal.
+
+## Diagnostic depuis Thonny
+
+Pour rendre la prochaine verification immediate lorsque le Wi-Fi est connecte :
 
 ```python
-import time
-import time_safety
-import time_manager
-
-# Avant la premiere synchronisation :
-time_safety.expire_initial_grace_for_diagnostic(time.ticks_ms())
-
-# Apres une synchronisation valide :
-time_safety.simulate_sync_age_seconds(
-    time_safety.MAX_TIME_WITHOUT_SYNC_SECONDS,
-    time_manager.get_utc_timestamp(),
-)
+import updater
+updater.force_check()
 ```
 
-La boucle principale applique le verrouillage au passage suivant. Une nouvelle
-synchronisation NTP restaure le fonctionnement normal.
+Pour consulter l'etat en RAM :
 
-## Fonctionnement conserve
+```python
+updater.get_state()
+```
 
-- horaire automatique de 06:00 a 00:00 apres validation NTP;
-- heure locale du Quebec, UTC-5 ou UTC-4 selon la saison;
-- resynchronisation NTP toutes les 6 heures;
-- reconnexion Wi-Fi non bloquante;
-- quatre profils visuels et tous leurs parametres inchanges;
-- derogation manuelle jusqu'a la prochaine transition JOUR/NUIT;
+Cette commande ne change pas la version locale et ne telecharge aucun fichier.
+
+## Futur perimetre des mises a jour
+
+Le manifeste pourra inclure les modules fonctionnels du projet, notamment :
+
+- `main.py`;
+- `config.py`;
+- `wifi_manager.py`;
+- `time_manager.py`;
+- `time_safety.py`;
+- `schedule_manager.py`;
+- `sun_manager.py`;
+- `night_profile_manager.py`;
+- `updater.py`;
+- tout autre module fonctionnel publie avec le micrologiciel.
+
+`config.py` fera volontairement partie des futures mises a jour. Les reglages
+locaux qu'il contient pourront donc etre remplaces par une version distante.
+
+Les elements suivants ne devront jamais etre remplaces par Netlify :
+
+- `wifi_secrets.py`;
+- `time_state.json`;
+- les fichiers temporaires `.new`;
+- les sauvegardes `.bak`;
+- les marqueurs internes de mise a jour;
+- les fichiers locaux de developpement;
+- `.gitignore`;
+- `package.json` et `package-lock.json`;
+- `pyrightconfig.json`;
+- le dossier `.vscode`;
+- le dossier `node_modules`.
+
+## Fonctionnement existant conserve
+
+- ESP32 DevKit V1, cinq LED WS2812 sur GPIO 5 et bouton sur GPIO 27;
+- quatre profils visuels et passage automatique temporaire a `NUIT`;
+- Wi-Fi non bloquant et synchronisation NTP toutes les 6 heures;
+- heure locale du Quebec et horaire automatique de 06:00 a 00:00;
+- securite temporelle et grace de 72 heures;
+- recuperation quotidienne du coucher du soleil par Open-Meteo;
 - Ctrl+C et les exceptions eteignent proprement les LED.
 
-## Fichiers principaux
+La version locale reste definie dans `main_tempo.py` :
 
-- `boot.py` : demarrage MicroPython;
-- `config.py` : profils visuels et parametres d'animation;
-- `main_tempo.py` : boucle principale, bouton et LED;
-- `schedule_manager.py` : horaire et derogation manuelle;
-- `time_manager.py` : NTP et conversion UTC vers l'heure du Quebec;
-- `time_safety.py` : grace initiale, persistance et verrouillage;
-- `wifi_manager.py` : connexion Wi-Fi non bloquante.
-
-Copier aussi `time_safety.py` sur l'ESP32 lors du deploiement.
+```python
+PROGRAM_VERSION = "3.0.0"
+```
 
 ## Demarrage dans Thonny
 

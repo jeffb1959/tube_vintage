@@ -1,0 +1,18 @@
+{
+  "manifest_version": 1,
+  "version": "3.0.0",
+  "files": [
+    {
+      "name": "main.py",
+      "url": "https://votre-site.netlify.app/firmware/main.py",
+      "size": 0,
+      "sha256": ""
+    },
+    {
+      "name": "config.py",
+      "url": "https://votre-site.netlify.app/firmware/config.py",
+      "size": 0,
+      "sha256": ""
+    }
+  ]
+}
