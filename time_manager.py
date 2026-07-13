@@ -49,10 +49,12 @@ _state = {
 
 
 def initialize():
-    if _state["initialized"]:
-        return
-
     _state["initialized"] = True
+    _state["time_valid"] = False
+    _state["last_sync_ms"] = None
+    _state["next_attempt_ms"] = None
+    _state["in_progress"] = False
+    _state["wifi_connected"] = False
 
 
 def is_time_valid():
@@ -68,6 +70,14 @@ def get_utc_time():
         return None
 
     return time.localtime()
+
+
+def get_utc_timestamp():
+    utc_time = get_utc_time()
+    if utc_time is None:
+        return None
+
+    return int(_tuple_to_timestamp(utc_time))
 
 
 def _days_in_month(year, month):
@@ -196,8 +206,8 @@ def _attempt_sync(now_ms):
         print("NTP : synchronisation reussie")
         print("Heure UTC : " + format_time_tuple(now_tuple) + " UTC")
     except Exception as error:
-        _state["time_valid"] = False
-        _state["last_sync_ms"] = None
+        if not _state["time_valid"]:
+            _state["last_sync_ms"] = None
         _state["next_attempt_ms"] = time.ticks_add(now_ms, NTP_RETRY_DELAY_MS)
         print("NTP : echec de synchronisation : " + str(error))
         print(

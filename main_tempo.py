@@ -6,10 +6,11 @@ import random
 import time
 import time_manager
 import schedule_manager
+import time_safety
 
 
 # Informations du programme
-VERSION = "2.0.3"
+VERSION = "2.0.4"
 
 # Configuration materielle
 DATA_PIN = 5
@@ -368,7 +369,7 @@ def main():
 
     try:
         print("Version :", VERSION)
-        print("Phase : 2.0.3")
+        print("Phase : 2.0.4")
         print("Broche DATA : GPIO", DATA_PIN)
         print("Nombre de LED :", LED_COUNT)
         print("Bouton : GPIO", BUTTON_PIN)
@@ -385,20 +386,12 @@ def main():
         wifi_manager.initialize()
         time_manager.initialize()
         schedule_manager.initialize()
+        time_safety.initialize()
         led_states = [make_led_state(now_ms, profile) for _ in range(LED_COUNT)]
         flash_state["next_ms"] = plan_next_flash(now_ms, profile)
 
-        start_profile_indicator(indicator_state, profile_name, now_ms)
-
-        leds_are_on = True
-        print("LEDs allumees")
-        print("Profil selectionne :", profile_name)
-
-        if indicator_state["active"]:
-            print("Indication : LED", indicator_state["led_index"] + 1)
-            apply_profile_indicator(leds, led_states, indicator_state, profile)
-        else:
-            apply_led_states(leds, led_states, flash_state, profile)
+        leds_are_on = False
+        apply_auto_off(leds, flash_state, indicator_state)
 
         previous_button_state = button.value()
         last_button_reading = previous_button_state
@@ -415,7 +408,17 @@ def main():
             if time_manager.is_time_valid():
                 local_time = time_manager.get_local_time()
                 if synced:
+                    sync_timestamp = time_manager.get_utc_timestamp()
+                    if sync_timestamp is not None:
+                        time_safety.record_ntp_sync(sync_timestamp)
+                        if schedule_manager.reset_for_time_realignment():
+                            print("Horaire : ancienne derogation manuelle annulee")
                     print_local_time(local_time)
+
+                current_utc = time_manager.get_utc_timestamp()
+                if current_utc is not None and time_safety.update(current_utc):
+                    leds_are_on = False
+                    apply_auto_off(leds, flash_state, indicator_state)
 
             schedule_event = schedule_manager.update(
                 local_time,
@@ -423,7 +426,11 @@ def main():
                 leds_are_on,
             )
 
-            if schedule_event is not None and schedule_event["changed"]:
+            if (
+                not time_safety.is_locked()
+                and schedule_event is not None
+                and schedule_event["changed"]
+            ):
                 if schedule_event["manual_override_cleared"]:
                     print("Horaire : derogation manuelle annulee")
 
@@ -465,6 +472,10 @@ def main():
                 previous_button_state = button_reading
 
                 if previous_button_state == 0:
+                    if time_safety.is_locked():
+                        print("Securite temps : bouton ignore, heure non fiable")
+                        continue
+
                     leds_are_on = not leds_are_on
 
                     if not leds_are_on:
@@ -491,7 +502,7 @@ def main():
                             now_ms,
                         )
 
-            if leds_are_on:
+            if leds_are_on and not time_safety.is_locked():
                 animation_updated = False
                 flash_updated = False
 

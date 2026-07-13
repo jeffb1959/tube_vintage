@@ -51,6 +51,13 @@ def clear_manual_override():
     return True
 
 
+def reset_for_time_realignment():
+    manual_cleared = clear_manual_override()
+    _state["current_period"] = None
+    _state["last_requested_state"] = None
+    return manual_cleared
+
+
 def _normalize_hour(hour):
     if hour < 0:
         return 0

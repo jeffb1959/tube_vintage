@@ -1,101 +1,96 @@
 # tube_vintage
 
-## Phase 2.0.3.1
+## Phase 2.0.4
 
-Objectif de cette phase : ajouter les minutes a l'horaire automatique tout en conservant le comportement valide.
+Cette phase ajoute une securite temporelle aux cinq LED WS2812 de l'ESP32.
 
-- Les LEDs s'allument a 06:00.
-- Les LEDs s'eteignent a 00:00.
-- Horaire actif uniquement avec une heure locale valide (`time_manager.py`).
-- Tant que l'heure n'est pas valide, le fonctionnement reste manuel.
-- Comparaison basee sur les minutes depuis minuit :
-  - `minutes_courantes = heure * 60 + minute`
-  - `minutes_debut = heure_debut * 60 + minute_debut`
-  - `minutes_fin = heure_fin * 60 + minute_fin`
+Apres une synchronisation NTP reussie, l'heure UTC de la synchronisation est
+memorisee. Si le Wi-Fi ou le serveur NTP devient indisponible, l'horloge interne
+continue d'alimenter l'horaire local, les profils, les animations et les
+derogations du bouton pendant au maximum 72 heures.
 
-Le bouton garde une priorite temporaire :
+Lorsque l'age de la derniere synchronisation atteint 72 heures :
 
-- un appui qui eteint cree une derogation manuelle jusqu'a la prochaine transition JOUR/NUIT;
-- un appui qui rallume cree une derogation manuelle jusqu'a la prochaine transition JOUR/NUIT.
+- les cinq LED sont immediatement eteintes;
+- le flash et l'indication de profil sont annules;
+- le bouton ne peut ni rallumer les LED ni changer le profil;
+- le profil utilisateur selectionne est conserve;
+- les tentatives Wi-Fi et NTP continuent normalement.
 
-Au passage, la derogation est annulee et l'horaire reprend le controle.
+Une nouvelle synchronisation NTP valide leve automatiquement le verrouillage.
+L'ancienne derogation manuelle est annulee et les LED sont realignees sur
+l'horaire courant. Si l'horaire demande l'allumage, le profil deja selectionne
+est utilise et son indication habituelle est affichee, sans passer au profil
+suivant.
 
-Comportement conserve :
+## Persistance et redemarrage
 
-- changement de profil au rallumage manuel (et seulement alors)
-- indication par LED au rallumage (profil actif)
-- scintillement et flash bleu-cyan inchanges
-- Ctrl+C eteint proprement
-- extinction de securite en cas d'exception
+`time_safety.py` ecrit `time_state.json` uniquement apres une synchronisation
+NTP reussie. Son format est :
 
-Regles de cette phase :
-
-- aucune sauvegarde persistante (ni dernier etat, ni derogation)
-- pas de securite de 72h pour cette phase
-
-## Fichiers de la phase 2.0.3.1
-
-- `boot.py` : demarrage MicroPython.
-- `config.py` : profils visuels et parametres d'animation.
-- `main_tempo.py` : logique principale (version, branchements, bouton, LEDs).
-- `schedule_manager.py` : gestion technique de l'horaire 06:00-00:00 et derogation.
-- `wifi_manager.py` : gestion Wi-Fi non bloquante.
-- `time_manager.py` : synchronisation NTP + conversion UTC -> heure locale du Quebec.
-- `wifi_secrets.example.py` : modele d'identifiants Wi-Fi (a copier en `wifi_secrets.py`).
-- `wifi_secrets.py` : identifiants Wi-Fi locaux (a exclure du depot).
-- `.gitignore` : protege `wifi_secrets.py`.
-
-## Demarrage
-
-1. Copier sur l'ESP32 : `boot.py`, `config.py`, `main_tempo.py`, `schedule_manager.py`, `wifi_manager.py`, `time_manager.py`, `wifi_secrets.example.py`.
-2. Copier `wifi_secrets.example.py` en `wifi_secrets.py`.
-3. Depuis la console Thonny :
-
-   ```python
-   exec(open("main_tempo.py").read())
-   ```
-
-## Messages console
-
-- `Version : 2.0.3` (main_tempo.py)
-- `Phase : 2.0.3.1`
-- `Horaire : periode JOUR` ou `Horaire : periode NUIT`
-- `Horaire : allumage automatique` ou `Horaire : extinction automatique`
-- `Horaire : derogation manuelle active jusqu'a la prochaine transition`
-- `Horaire : derogation manuelle annulee`
-
-## Test court (facultatif, a retirer ensuite)
-
-Pour verifier rapidement la transition:
-
-```python
-SCHEDULE_START_HOUR = 17
-SCHEDULE_START_MINUTE = 25
-SCHEDULE_END_HOUR = 17
-SCHEDULE_END_MINUTE = 26
+```json
+{
+  "version": 1,
+  "last_ntp_sync_utc": 1783891200
+}
 ```
 
-Attendu:
+L'ecriture complete est d'abord effectuee dans `time_state.tmp`. Le fichier
+final precedent est ensuite supprime, puis le fichier temporaire est renomme en
+`time_state.json`. Une erreur de lecture ou d'ecriture est signalee sans faire
+planter les LED et sans invalider une synchronisation reussie en memoire vive.
 
-- allumage automatique a 17:25
-- extinction automatique a 17:26
+Au lancement, le fichier persistant est lu et valide pour information, mais il
+n'autorise jamais les LED. Le systeme demarre verrouille et exige une nouvelle
+synchronisation NTP dans la session courante. Ce choix couvre de facon sure une
+coupure complete pendant laquelle la RTC de l'ESP32 peut ne plus etre fiable.
 
-Puis reinstaller les valeurs normales:
+## Test accelere de la securite
+
+La limite de production reste toujours `72 * 60 * 60` secondes. Apres une
+premiere synchronisation NTP, le diagnostic suivant simule uniquement en RAM
+une synchronisation vieille de 72 heures :
 
 ```python
-SCHEDULE_START_HOUR = 6
-SCHEDULE_START_MINUTE = 0
-SCHEDULE_END_HOUR = 0
-SCHEDULE_END_MINUTE = 0
+import time_safety
+import time_manager
+time_safety.simulate_sync_age_seconds(
+    time_safety.MAX_TIME_WITHOUT_SYNC_SECONDS,
+    time_manager.get_utc_timestamp(),
+)
 ```
 
-## Materiel
+La boucle principale applique alors le verrouillage. Le fichier persistant
+n'est pas modifie par ce diagnostic et la prochaine synchronisation NTP restaure
+l'etat normal.
 
-- ESP32 DevKit V1
-- 5 LED WS2812 de 6 mm sur GPIO 5
-- bouton poussoir entre GPIO 27 et GND (PULL_UP)
-- alimentation 5V pour les LED
-- resistance 330-470 ohms sur la ligne DATA
-- condensateur 470 uF pres de la premiere LED
-- masse commune ESP32 / LED / alimentation
-- DATA vers DIN de la premiere LED
+## Horaire et fonctionnement conserve
+
+- horaire automatique de 06:00 a 00:00, heure locale du Quebec;
+- conversion heure normale UTC-5 et heure avancee UTC-4;
+- resynchronisation NTP toutes les 6 heures;
+- reconnexion Wi-Fi non bloquante;
+- quatre profils visuels inchanges;
+- changement de profil uniquement au rallumage manuel autorise;
+- derogation manuelle jusqu'a la prochaine transition JOUR/NUIT;
+- Ctrl+C et les exceptions eteignent proprement les LED.
+
+## Fichiers principaux
+
+- `boot.py` : demarrage MicroPython;
+- `config.py` : profils visuels et parametres d'animation;
+- `main_tempo.py` : boucle principale, bouton et LED;
+- `schedule_manager.py` : horaire et derogation manuelle;
+- `time_manager.py` : NTP et conversion UTC vers l'heure du Quebec;
+- `time_safety.py` : persistance, tolerance de 72 heures et verrouillage;
+- `wifi_manager.py` : connexion Wi-Fi non bloquante.
+
+Copier aussi `time_safety.py` sur l'ESP32 lors du deploiement. Ne pas copier un
+ancien `time_state.json` pour autoriser les LED : une synchronisation NTP dans
+la session reste obligatoire.
+
+## Demarrage dans Thonny
+
+```python
+exec(open("main_tempo.py").read())
+```
