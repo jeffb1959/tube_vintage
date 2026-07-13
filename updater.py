@@ -1,4 +1,6 @@
 import time
+import gc
+import network_request_lock
 
 try:
     import urequests as requests
@@ -10,11 +12,13 @@ except ImportError:
 
 
 # Remplacer ce domaine par l'URL reelle du site Netlify avant le deploiement.
-VERSION_MANIFEST_URL = "https://votre-site.netlify.app/version.json"
+VERSION_MANIFEST_URL = "https://tube-vintage-jeff.netlify.app/version.json"
 
-UPDATE_INITIAL_DELAY_MS = 15 * 1000
+UPDATE_INITIAL_DELAY_MS = 60 * 1000
 UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 UPDATE_RETRY_DELAY_MS = 60 * 60 * 1000
+UPDATE_LOCK_RETRY_DELAY_MS = 5 * 1000
+UPDATE_DELAY_AFTER_SUN_MS = 30 * 1000
 SUPPORTED_MANIFEST_VERSION = 1
 
 
@@ -28,6 +32,7 @@ _state = {
     "in_progress": False,
     "last_error": None,
     "check_completed": False,
+    "first_attempt_started": False,
 }
 
 
@@ -70,6 +75,7 @@ def initialize(local_version):
     _state["in_progress"] = False
     _state["last_error"] = None
     _state["check_completed"] = False
+    _state["first_attempt_started"] = False
 
     if _parse_version(local_version) is None:
         _state["last_error"] = "version locale invalide"
@@ -101,14 +107,44 @@ def _schedule_retry(now_ms):
     print("Mise a jour : nouvelle tentative dans 1 heure")
 
 
+def _print_free_memory(label):
+    mem_free = getattr(gc, "mem_free", None)
+    if callable(mem_free):
+        print("Memoire libre " + label + " Mise a jour : " + str(mem_free()))
+
+
 def _check_manifest(now_ms):
+    if not _state["first_attempt_started"]:
+        last_sun_release_ms = network_request_lock.get_last_release_ms("sun")
+        if last_sun_release_ms is None:
+            _state["next_check_ms"] = time.ticks_add(
+                now_ms, UPDATE_LOCK_RETRY_DELAY_MS
+            )
+            return False
+        earliest_check_ms = time.ticks_add(
+            last_sun_release_ms, UPDATE_DELAY_AFTER_SUN_MS
+        )
+        if time.ticks_diff(now_ms, earliest_check_ms) < 0:
+            _state["next_check_ms"] = earliest_check_ms
+            return False
+
+    if not network_request_lock.try_acquire("updater", now_ms):
+        _state["next_check_ms"] = time.ticks_add(
+            now_ms, UPDATE_LOCK_RETRY_DELAY_MS
+        )
+        return False
+
+    _state["first_attempt_started"] = True
     response = None
+    payload = None
     _state["in_progress"] = True
     _state["check_completed"] = False
     _state["last_error"] = None
     print("Mise a jour : verification du manifeste")
 
     try:
+        gc.collect()
+        _print_free_memory("avant")
         if requests is None:
             raise RuntimeError("bibliotheque HTTP indisponible")
 
@@ -123,7 +159,9 @@ def _check_manifest(now_ms):
             _schedule_retry(now_ms)
             return False
 
-        remote_version = _validate_manifest(response.json())
+        payload = response.json()
+        remote_version = _validate_manifest(payload)
+        payload = None
         if remote_version is None:
             _state["last_error"] = "manifeste invalide"
             print("Mise a jour : manifeste invalide")
@@ -162,7 +200,12 @@ def _check_manifest(now_ms):
                 response.close()
             except Exception:
                 pass
+        response = None
+        payload = None
         _state["in_progress"] = False
+        network_request_lock.release("updater", time.ticks_ms())
+        gc.collect()
+        _print_free_memory("apres")
 
 
 def update(now_ms, wifi_connected):
@@ -212,4 +255,5 @@ def get_state():
         "last_error": _state["last_error"],
         "in_progress": _state["in_progress"],
         "check_completed": _state["check_completed"],
+        "first_attempt_started": _state["first_attempt_started"],
     }

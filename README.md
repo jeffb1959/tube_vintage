@@ -1,6 +1,6 @@
 # tube_vintage
 
-## Phase 3.0.0
+## Correction 3.0.0.1
 
 Cette phase ajoute une premiere verification de version depuis un manifeste
 statique publie sur Netlify. L'ESP32 consulte et valide `version.json`, compare
@@ -61,9 +61,29 @@ dictionnaires. `size` et `sha256` ne sont pas encore verifies.
 
 ## Verification et comparaison
 
-Apres une nouvelle connexion Wi-Fi, `updater.py` attend 15 secondes avec une
-echeance monotone avant de consulter Netlify. Ce delai espace la requete des
-operations NTP et Open-Meteo.
+Apres une nouvelle connexion Wi-Fi, `updater.py` attend 60 secondes avec une
+echeance monotone avant de consulter Netlify. La premiere verification attend
+egalement qu'une tentative Open-Meteo soit terminee depuis au moins 30 secondes.
+Ce fonctionnement impose l'ordre Wi-Fi, NTP, Open-Meteo, puis Netlify sans
+utiliser de long `sleep`.
+
+`sun_manager.py` et `updater.py` partagent le verrou non bloquant
+`network_request_lock.py`. Une seule requete HTTPS peut le posseder. Sa
+liberation est garantie dans un bloc `finally` et impose ensuite 10 secondes de
+repos avant une autre requete. Si le verrou est indisponible, le gestionnaire
+attend 5 secondes sans bloquer les LED.
+
+Pour reduire la pression memoire, chaque requete appelle `gc.collect()` juste
+avant son ouverture et apres la fermeture de la reponse et l'abandon du JSON
+complet. Les diagnostics temporaires affichent, lorsque `gc.mem_free()` est
+disponible :
+
+```text
+Memoire libre avant Soleil : ...
+Memoire libre apres Soleil : ...
+Memoire libre avant Mise a jour : ...
+Memoire libre apres Mise a jour : ...
+```
 
 - apres une verification reussie, la suivante est planifiee dans 24 heures;
 - apres un echec reseau, HTTP ou JSON, un nouvel essai est planifie dans une

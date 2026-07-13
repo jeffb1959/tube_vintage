@@ -1,4 +1,6 @@
 import time
+import gc
+import network_request_lock
 
 try:
     import urequests as requests
@@ -27,6 +29,7 @@ OPEN_METEO_URL = (
 
 SUN_REQUEST_DELAY_MS = 7 * 1000
 SUN_RETRY_DELAY_MS = 15 * 60 * 1000
+SUN_LOCK_RETRY_DELAY_MS = 5 * 1000
 MIN_VALID_YEAR = 2024
 MAX_VALID_YEAR = 2100
 
@@ -149,13 +152,28 @@ def _schedule_retry(now_ms):
     print("Soleil : nouvelle tentative dans 15 minutes")
 
 
+def _print_free_memory(label):
+    mem_free = getattr(gc, "mem_free", None)
+    if callable(mem_free):
+        print("Memoire libre " + label + " Soleil : " + str(mem_free()))
+
+
 def _request_sunset(expected_date, now_ms):
+    if not network_request_lock.try_acquire("sun", now_ms):
+        _state["next_attempt_ms"] = time.ticks_add(
+            now_ms, SUN_LOCK_RETRY_DELAY_MS
+        )
+        return False
+
     response = None
+    payload = None
     _state["in_progress"] = True
     _state["last_error"] = None
     print("Soleil : recuperation du coucher demandee")
 
     try:
+        gc.collect()
+        _print_free_memory("avant")
         if requests is None:
             raise RuntimeError("bibliotheque HTTP indisponible")
 
@@ -170,7 +188,9 @@ def _request_sunset(expected_date, now_ms):
             _schedule_retry(now_ms)
             return False
 
-        sunset = _parse_response(response.json(), expected_date)
+        payload = response.json()
+        sunset = _parse_response(payload, expected_date)
+        payload = None
         if sunset is None:
             _state["last_error"] = "reponse JSON invalide"
             print("Soleil : reponse JSON invalide")
@@ -192,7 +212,12 @@ def _request_sunset(expected_date, now_ms):
                 response.close()
             except Exception:
                 pass
+        response = None
+        payload = None
         _state["in_progress"] = False
+        network_request_lock.release("sun", time.ticks_ms())
+        gc.collect()
+        _print_free_memory("apres")
 
 
 def update(now_ms, wifi_connected, time_valid, local_date):

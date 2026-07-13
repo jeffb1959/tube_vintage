@@ -10,6 +10,7 @@ import time_safety
 import sun_manager
 import night_profile_manager
 import updater
+import network_request_lock
 
 
 # Informations du programme
@@ -394,6 +395,7 @@ def main():
         time_safety.initialize(now_ms)
         sun_manager.initialize()
         night_profile_manager.initialize()
+        network_request_lock.initialize(now_ms)
         updater.initialize(PROGRAM_VERSION)
         led_states = [
             make_led_state(now_ms, effective_profile) for _ in range(LED_COUNT)
@@ -422,7 +424,6 @@ def main():
             now_ms = time.ticks_ms()
             force_schedule_realign = False
             wifi_manager.update(now_ms)
-            updater.update(now_ms, wifi_manager.is_connected())
             synced = time_manager.update(
                 now_ms, wifi_connected=wifi_manager.is_connected()
             )
@@ -473,6 +474,8 @@ def main():
                             sunset["minute"],
                         )
                     )
+
+            updater.update(now_ms, wifi_manager.is_connected())
 
             sunset = sun_manager.get_sunset()
             night_event = night_profile_manager.update(local_time, sunset)
