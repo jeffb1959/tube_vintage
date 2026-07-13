@@ -10,7 +10,7 @@ import time_safety
 
 
 # Informations du programme
-VERSION = "2.0.4"
+VERSION = "2.0.4.1"
 
 # Configuration materielle
 DATA_PIN = 5
@@ -369,7 +369,7 @@ def main():
 
     try:
         print("Version :", VERSION)
-        print("Phase : 2.0.4")
+        print("Phase : 2.0.4.1")
         print("Broche DATA : GPIO", DATA_PIN)
         print("Nombre de LED :", LED_COUNT)
         print("Bouton : GPIO", BUTTON_PIN)
@@ -386,12 +386,21 @@ def main():
         wifi_manager.initialize()
         time_manager.initialize()
         schedule_manager.initialize()
-        time_safety.initialize()
+        time_safety.initialize(now_ms)
         led_states = [make_led_state(now_ms, profile) for _ in range(LED_COUNT)]
         flash_state["next_ms"] = plan_next_flash(now_ms, profile)
 
-        leds_are_on = False
-        apply_auto_off(leds, flash_state, indicator_state)
+        start_profile_indicator(indicator_state, profile_name, now_ms)
+
+        leds_are_on = True
+        print("LEDs allumees")
+        print("Profil selectionne :", profile_name)
+
+        if indicator_state["active"]:
+            print("Indication : LED", indicator_state["led_index"] + 1)
+            apply_profile_indicator(leds, led_states, indicator_state, profile)
+        else:
+            apply_led_states(leds, led_states, flash_state, profile)
 
         previous_button_state = button.value()
         last_button_reading = previous_button_state
@@ -399,6 +408,7 @@ def main():
 
         while True:
             now_ms = time.ticks_ms()
+            force_schedule_realign = False
             wifi_manager.update(now_ms)
             synced = time_manager.update(
                 now_ms, wifi_connected=wifi_manager.is_connected()
@@ -410,20 +420,33 @@ def main():
                 if synced:
                     sync_timestamp = time_manager.get_utc_timestamp()
                     if sync_timestamp is not None:
-                        time_safety.record_ntp_sync(sync_timestamp)
-                        if schedule_manager.reset_for_time_realignment():
-                            print("Horaire : ancienne derogation manuelle annulee")
+                        first_session_sync = not time_safety.has_session_sync()
+                        if time_safety.record_ntp_sync(sync_timestamp):
+                            force_schedule_realign = True
+                            if schedule_manager.reset_for_time_realignment():
+                                print("Horaire : ancienne derogation manuelle annulee")
+                            if first_session_sync:
+                                print("Securite temps : horaire automatique active")
                     print_local_time(local_time)
 
                 current_utc = time_manager.get_utc_timestamp()
-                if current_utc is not None and time_safety.update(current_utc):
+                if time_safety.update(now_ms, current_utc):
                     leds_are_on = False
                     apply_auto_off(leds, flash_state, indicator_state)
+            elif time_safety.update(now_ms):
+                leds_are_on = False
+                apply_auto_off(leds, flash_state, indicator_state)
+
+            schedule_current_leds_on = leds_are_on
+            if force_schedule_realign:
+                schedule_current_leds_on = not schedule_manager.get_requested_state_from_time(
+                    local_time
+                )
 
             schedule_event = schedule_manager.update(
                 local_time,
                 time_manager.is_time_valid(),
-                leds_are_on,
+                schedule_current_leds_on,
             )
 
             if (

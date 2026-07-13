@@ -1,32 +1,53 @@
 # tube_vintage
 
-## Phase 2.0.4
+## Phase 2.0.4.1
 
-Cette phase ajoute une securite temporelle aux cinq LED WS2812 de l'ESP32.
+Cette phase conserve la securite temporelle de 72 heures tout en autorisant le
+fonctionnement immediat des LED au demarrage, meme sans Wi-Fi et sans heure NTP.
 
-Apres une synchronisation NTP reussie, l'heure UTC de la synchronisation est
-memorisee. Si le Wi-Fi ou le serveur NTP devient indisponible, l'horloge interne
-continue d'alimenter l'horaire local, les profils, les animations et les
-derogations du bouton pendant au maximum 72 heures.
+Au lancement :
 
-Lorsque l'age de la derniere synchronisation atteint 72 heures :
+- le profil initial et son indication sont affiches immediatement;
+- le scintillement, le flash du profil et le bouton fonctionnent normalement;
+- le changement de profil reste disponible lors d'un rallumage manuel;
+- les tentatives Wi-Fi et NTP continuent en arriere-plan;
+- une periode de grace locale de 72 heures commence avec `ticks_ms()`.
+
+Tant qu'aucune synchronisation NTP n'a reussi, l'horaire automatique de 06:00 a
+00:00 reste desactive. Le programme fonctionne manuellement et ne tente pas de
+deduire l'heure locale d'une RTC non validee.
+
+## Premiere synchronisation et fonctionnement normal
+
+La premiere synchronisation NTP reussie met fin a la periode de grace monotone,
+enregistre le timestamp UTC et active l'horaire automatique. L'ancienne
+derogation manuelle est annulee et l'etat des LED est realigne une seule fois
+sur l'horaire courant, sans changer ni avancer le profil utilisateur.
+
+Apres cette premiere synchronisation, l'age de la derniere synchronisation est
+calcule avec les secondes UTC. L'horloge interne permet de conserver l'horaire,
+les profils et les derogations pendant au maximum 72 heures sans nouvelle
+synchronisation. `ticks_ms()` n'est alors plus la reference de cette limite.
+
+## Verrouillage
+
+Lorsque la periode de grace initiale expire, ou lorsque la derniere
+synchronisation UTC atteint 72 heures :
 
 - les cinq LED sont immediatement eteintes;
 - le flash et l'indication de profil sont annules;
 - le bouton ne peut ni rallumer les LED ni changer le profil;
-- le profil utilisateur selectionne est conserve;
+- le profil utilisateur courant est conserve;
 - les tentatives Wi-Fi et NTP continuent normalement.
 
-Une nouvelle synchronisation NTP valide leve automatiquement le verrouillage.
-L'ancienne derogation manuelle est annulee et les LED sont realignees sur
-l'horaire courant. Si l'horaire demande l'allumage, le profil deja selectionne
-est utilise et son indication habituelle est affichee, sans passer au profil
-suivant.
+Seule une nouvelle synchronisation NTP valide leve le verrouillage. Elle met a
+jour l'etat persistant, annule toute ancienne derogation et realigne les LED sur
+l'horaire avec le profil deja selectionne.
 
-## Persistance et redemarrage
+## Persistance
 
-`time_safety.py` ecrit `time_state.json` uniquement apres une synchronisation
-NTP reussie. Son format est :
+`time_safety.py` lit `time_state.json` au demarrage et l'ecrit uniquement apres
+une synchronisation NTP reussie :
 
 ```json
 {
@@ -35,43 +56,54 @@ NTP reussie. Son format est :
 }
 ```
 
-L'ecriture complete est d'abord effectuee dans `time_state.tmp`. Le fichier
-final precedent est ensuite supprime, puis le fichier temporaire est renomme en
-`time_state.json`. Une erreur de lecture ou d'ecriture est signalee sans faire
-planter les LED et sans invalider une synchronisation reussie en memoire vive.
+Le fichier conserve une trace de la derniere synchronisation, mais son contenu
+ne bloque pas les LED et ne sert pas a appliquer l'horaire avant qu'une heure
+valide ait ete obtenue dans la session courante.
 
-Au lancement, le fichier persistant est lu et valide pour information, mais il
-n'autorise jamais les LED. Le systeme demarre verrouille et exige une nouvelle
-synchronisation NTP dans la session courante. Ce choix couvre de facon sure une
-coupure complete pendant laquelle la RTC de l'ESP32 peut ne plus etre fiable.
+L'ecriture complete passe d'abord par `time_state.tmp`. L'ancien fichier final
+est ensuite supprime avec prudence, puis le fichier temporaire est renomme en
+`time_state.json`. Un fichier absent ou invalide et une erreur d'ecriture sont
+geres sans interrompre les LED.
 
-## Test accelere de la securite
+## Limite acceptee apres un redemarrage complet
 
-La limite de production reste toujours `72 * 60 * 60` secondes. Apres une
-premiere synchronisation NTP, le diagnostic suivant simule uniquement en RAM
-une synchronisation vieille de 72 heures :
+La periode initiale utilise le compteur monotone de l'ESP32. Apres une coupure
+complete, `ticks_ms()` repart a zero : si le Wi-Fi reste indisponible, une
+nouvelle periode de grace de 72 heures commence. Cette limite est acceptee pour
+ce projet, car la television est normalement alimentee en permanence. Aucun
+module RTC externe ni calcul fragile du temps passe hors alimentation n'est
+ajoute.
+
+## Diagnostics acceleres
+
+Les fonctions suivantes modifient uniquement l'etat en RAM et ne changent pas
+la limite de production `72 * 60 * 60` :
 
 ```python
+import time
 import time_safety
 import time_manager
+
+# Avant la premiere synchronisation :
+time_safety.expire_initial_grace_for_diagnostic(time.ticks_ms())
+
+# Apres une synchronisation valide :
 time_safety.simulate_sync_age_seconds(
     time_safety.MAX_TIME_WITHOUT_SYNC_SECONDS,
     time_manager.get_utc_timestamp(),
 )
 ```
 
-La boucle principale applique alors le verrouillage. Le fichier persistant
-n'est pas modifie par ce diagnostic et la prochaine synchronisation NTP restaure
-l'etat normal.
+La boucle principale applique le verrouillage au passage suivant. Une nouvelle
+synchronisation NTP restaure le fonctionnement normal.
 
-## Horaire et fonctionnement conserve
+## Fonctionnement conserve
 
-- horaire automatique de 06:00 a 00:00, heure locale du Quebec;
-- conversion heure normale UTC-5 et heure avancee UTC-4;
+- horaire automatique de 06:00 a 00:00 apres validation NTP;
+- heure locale du Quebec, UTC-5 ou UTC-4 selon la saison;
 - resynchronisation NTP toutes les 6 heures;
 - reconnexion Wi-Fi non bloquante;
-- quatre profils visuels inchanges;
-- changement de profil uniquement au rallumage manuel autorise;
+- quatre profils visuels et tous leurs parametres inchanges;
 - derogation manuelle jusqu'a la prochaine transition JOUR/NUIT;
 - Ctrl+C et les exceptions eteignent proprement les LED.
 
@@ -82,12 +114,10 @@ l'etat normal.
 - `main_tempo.py` : boucle principale, bouton et LED;
 - `schedule_manager.py` : horaire et derogation manuelle;
 - `time_manager.py` : NTP et conversion UTC vers l'heure du Quebec;
-- `time_safety.py` : persistance, tolerance de 72 heures et verrouillage;
+- `time_safety.py` : grace initiale, persistance et verrouillage;
 - `wifi_manager.py` : connexion Wi-Fi non bloquante.
 
-Copier aussi `time_safety.py` sur l'ESP32 lors du deploiement. Ne pas copier un
-ancien `time_state.json` pour autoriser les LED : une synchronisation NTP dans
-la session reste obligatoire.
+Copier aussi `time_safety.py` sur l'ESP32 lors du deploiement.
 
 ## Demarrage dans Thonny
 

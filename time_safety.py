@@ -13,6 +13,8 @@ MAX_VALID_YEAR = 2100
 
 _state = {
     "initialized": False,
+    "initial_grace_active": False,
+    "initial_grace_deadline_ms": None,
     "session_sync_received": False,
     "last_ntp_sync_utc": None,
     "persisted_last_ntp_sync_utc": None,
@@ -52,12 +54,19 @@ def _load_persisted_state():
         return None
 
 
-def initialize():
+def initialize(now_ms=None):
+    if now_ms is None:
+        now_ms = time.ticks_ms()
+
     _state["initialized"] = True
     _state["persisted_last_ntp_sync_utc"] = _load_persisted_state()
     _state["session_sync_received"] = False
     _state["last_ntp_sync_utc"] = None
-    _state["locked"] = True
+    _state["initial_grace_active"] = True
+    _state["initial_grace_deadline_ms"] = time.ticks_add(
+        now_ms, MAX_TIME_WITHOUT_SYNC_SECONDS * 1000
+    )
+    _state["locked"] = False
     _state["reported_threshold_hours"] = 0
 
     if _state["persisted_last_ntp_sync_utc"] is None:
@@ -65,7 +74,10 @@ def initialize():
     else:
         print("Securite temps : derniere synchronisation enregistree trouvee")
 
-    print("Securite temps : LED verrouillees jusqu'a une synchronisation NTP")
+    print(
+        "Securite temps : aucune heure valide, periode de grace de 72 heures demarree"
+    )
+    print("Securite temps : fonctionnement manuel autorise sans Wi-Fi")
 
 
 def _remove_file_if_present(filename):
@@ -100,14 +112,20 @@ def record_ntp_sync(timestamp_utc):
         return False
 
     was_locked = _state["locked"]
+    first_session_sync = not _state["session_sync_received"]
     timestamp_utc = int(timestamp_utc)
     _state["session_sync_received"] = True
+    _state["initial_grace_active"] = False
+    _state["initial_grace_deadline_ms"] = None
     _state["last_ntp_sync_utc"] = timestamp_utc
     _state["persisted_last_ntp_sync_utc"] = timestamp_utc
     _state["locked"] = False
     _state["reported_threshold_hours"] = 0
 
-    print("Securite temps : nouvelle synchronisation recue")
+    if first_session_sync:
+        print("Securite temps : premiere synchronisation recue")
+    else:
+        print("Securite temps : nouvelle synchronisation recue")
     if _save_state(timestamp_utc):
         print("Securite temps : synchronisation enregistree")
 
@@ -128,8 +146,23 @@ def get_sync_age_seconds(current_utc):
     return max(0, int(current_utc) - last_sync)
 
 
-def update(current_utc):
-    if not _state["initialized"] or not _state["session_sync_received"]:
+def update(now_ms, current_utc=None):
+    if not _state["initialized"] or _state["locked"]:
+        return False
+
+    if not _state["session_sync_received"]:
+        grace_deadline = _state["initial_grace_deadline_ms"]
+        if (
+            _state["initial_grace_active"]
+            and grace_deadline is not None
+            and time.ticks_diff(now_ms, grace_deadline) >= 0
+        ):
+            _state["initial_grace_active"] = False
+            _state["locked"] = True
+            print("Securite temps : periode de grace expiree")
+            print("Securite temps : LED verrouillees")
+            return True
+
         return False
 
     age_seconds = get_sync_age_seconds(current_utc)
@@ -163,6 +196,24 @@ def has_session_sync():
     return bool(_state["session_sync_received"])
 
 
+def is_initial_grace_active():
+    return bool(_state["initial_grace_active"])
+
+
+def get_initial_grace_remaining_seconds(now_ms=None):
+    if not _state["initial_grace_active"]:
+        return 0
+    if now_ms is None:
+        now_ms = time.ticks_ms()
+
+    grace_deadline = _state["initial_grace_deadline_ms"]
+    if grace_deadline is None:
+        return 0
+
+    remaining_ms = time.ticks_diff(grace_deadline, now_ms)
+    return max(0, remaining_ms // 1000)
+
+
 def get_last_ntp_sync_utc():
     return _state["last_ntp_sync_utc"]
 
@@ -180,4 +231,15 @@ def simulate_sync_age_seconds(age_seconds, current_utc):
 
     _state["last_ntp_sync_utc"] = int(current_utc) - int(age_seconds)
     _state["reported_threshold_hours"] = 0
+    return True
+
+
+def expire_initial_grace_for_diagnostic(now_ms=None):
+    """Expire only the RAM grace period; production remains configured for 72 h."""
+    if not _state["initial_grace_active"]:
+        return False
+    if now_ms is None:
+        now_ms = time.ticks_ms()
+
+    _state["initial_grace_deadline_ms"] = now_ms
     return True
