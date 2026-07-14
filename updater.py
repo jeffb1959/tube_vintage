@@ -32,7 +32,7 @@ UPDATE_LOCK_RETRY_DELAY_MS = 5 * 1000
 UPDATE_DELAY_AFTER_SUN_MS = 30 * 1000
 DOWNLOAD_FILE_GAP_MS = 10 * 1000
 DOWNLOAD_BLOCK_SIZE = 1024
-DOWNLOAD_PROGRESS_INTERVAL_BYTES = 16 * 1024
+DOWNLOAD_PROGRESS_INTERVAL_BYTES = 4 * 1024
 DOWNLOAD_SOCKET_TIMEOUT_SECONDS = 20
 DOWNLOAD_SPACE_MARGIN_BYTES = 4096
 SUPPORTED_MANIFEST_VERSION = 1
@@ -359,6 +359,18 @@ def _sha256_hex(hasher):
     return binascii.hexlify(hasher.digest()).decode().lower()
 
 
+def _get_response_header(response, header_name):
+    headers = getattr(response, "headers", None)
+    if not isinstance(headers, dict):
+        return None
+
+    expected_name = header_name.lower()
+    for name, value in headers.items():
+        if isinstance(name, str) and name.lower() == expected_name:
+            return str(value).strip()
+    return None
+
+
 def _fail_download(now_ms, error):
     _state["last_error"] = str(error)
     print("Mise a jour : " + str(error))
@@ -398,6 +410,9 @@ def _download_next_file(now_ms):
     output_file = None
     stream = None
     chunk = None
+    read_buffer = None
+    buffer_view = None
+    data_view = None
     _state["download_in_progress"] = True
     _state["download_current_file"] = filename
     print("Mise a jour : telechargement de " + filename)
@@ -408,21 +423,45 @@ def _download_next_file(now_ms):
         if requests is None:
             raise RuntimeError("bibliotheque HTTP indisponible")
 
+        print("Mise a jour : ouverture HTTP")
         response = requests.get(
             file_entry["url"],
             headers=DOWNLOAD_REQUEST_HEADERS,
             stream=True,
         )
+        print("Mise a jour : reponse HTTP recue")
         if response is None:
             raise RuntimeError("aucune reponse HTTP")
         status_code = getattr(response, "status_code", None)
         if status_code is not None and not 200 <= status_code < 300:
             raise RuntimeError("HTTP " + str(status_code))
 
+        expected_size = file_entry["size"]
+        content_length = _get_response_header(response, "Content-Length")
+        content_encoding = _get_response_header(response, "Content-Encoding")
+        transfer_encoding = _get_response_header(response, "Transfer-Encoding")
+        if content_length is not None:
+            print("Mise a jour : Content-Length = " + content_length)
+        if content_encoding is not None:
+            print("Mise a jour : Content-Encoding = " + content_encoding)
+        if transfer_encoding is not None:
+            print("Mise a jour : Transfer-Encoding = " + transfer_encoding)
+
+        if content_encoding is not None and content_encoding.lower() not in (
+            "",
+            "identity",
+        ):
+            raise RuntimeError("encodage HTTP non pris en charge")
+        if content_length is not None and content_length.isdigit():
+            if int(content_length) != expected_size:
+                raise RuntimeError("taille HTTP invalide")
+
         stream = getattr(response, "raw", None)
+        read_into = getattr(stream, "readinto", None)
         read_chunk = getattr(stream, "read", None)
-        if not callable(read_chunk):
+        if not callable(read_into) and not callable(read_chunk):
             raise RuntimeError("lecture HTTP en flux indisponible")
+        print("Mise a jour : flux HTTP pret")
 
         set_timeout = getattr(stream, "settimeout", None)
         if callable(set_timeout):
@@ -432,23 +471,51 @@ def _download_next_file(now_ms):
                 pass
 
         received_bytes = 0
-        expected_size = file_entry["size"]
         next_progress_bytes = DOWNLOAD_PROGRESS_INTERVAL_BYTES
+        diagnose_each_read = filename == "update_test_large.txt"
+        read_buffer = bytearray(DOWNLOAD_BLOCK_SIZE)
+        buffer_view = memoryview(read_buffer)
         hasher = hashlib.sha256()
         output_file = open(target_path, "wb")
+        print("Mise a jour : debut lecture")
         while received_bytes < expected_size:
             remaining_bytes = expected_size - received_bytes
             read_size = min(DOWNLOAD_BLOCK_SIZE, remaining_bytes)
-            chunk = read_chunk(read_size)
-            if not chunk:
-                raise RuntimeError("taille invalide : flux tronque")
-            if not isinstance(chunk, (bytes, bytearray)):
-                raise RuntimeError("bloc HTTP invalide")
-            if len(chunk) > read_size:
-                raise RuntimeError("taille invalide")
-            output_file.write(chunk)
-            hasher.update(chunk)
-            received_bytes += len(chunk)
+            if diagnose_each_read:
+                print("Mise a jour : lecture demandee, recus = %d" % received_bytes)
+
+            if callable(read_into):
+                target_view = buffer_view[:read_size]
+                bytes_read = read_into(target_view)
+                if not isinstance(bytes_read, int):
+                    raise RuntimeError("lecture HTTP invalide")
+                if diagnose_each_read:
+                    print("Mise a jour : lecture recue, octets = %d" % bytes_read)
+                if bytes_read <= 0:
+                    raise RuntimeError("taille invalide : flux tronque")
+                if bytes_read > read_size:
+                    raise RuntimeError("taille invalide")
+                data_view = buffer_view[:bytes_read]
+                output_file.write(data_view)
+                hasher.update(data_view)
+                received_bytes += bytes_read
+            else:
+                if not callable(read_chunk):
+                    raise RuntimeError("lecture HTTP en flux indisponible")
+                chunk = read_chunk(read_size)
+                chunk_size = len(chunk) if isinstance(chunk, (bytes, bytearray)) else 0
+                if diagnose_each_read:
+                    print("Mise a jour : lecture recue, octets = %d" % chunk_size)
+                if not chunk:
+                    raise RuntimeError("taille invalide : flux tronque")
+                if not isinstance(chunk, (bytes, bytearray)):
+                    raise RuntimeError("bloc HTTP invalide")
+                if len(chunk) > read_size:
+                    raise RuntimeError("taille invalide")
+                output_file.write(chunk)
+                hasher.update(chunk)
+                received_bytes += len(chunk)
+
             while received_bytes >= next_progress_bytes:
                 print(
                     "Mise a jour : %d / %d octets"
@@ -483,6 +550,21 @@ def _download_next_file(now_ms):
                 now_ms, DOWNLOAD_FILE_GAP_MS
             )
         return True
+    except KeyboardInterrupt:
+        if output_file is not None:
+            try:
+                output_file.close()
+            except Exception:
+                pass
+            output_file = None
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+            response = None
+        _cleanup_download_attempt()
+        raise
     except Exception as error:
         if output_file is not None:
             try:
@@ -513,6 +595,9 @@ def _download_next_file(now_ms):
         response = None
         stream = None
         chunk = None
+        read_buffer = None
+        buffer_view = None
+        data_view = None
         _state["download_in_progress"] = False
         network_request_lock.release("updater-download", time.ticks_ms())
         gc.collect()
