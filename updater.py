@@ -37,6 +37,11 @@ DOWNLOAD_SOCKET_TIMEOUT_SECONDS = 20
 DOWNLOAD_SPACE_MARGIN_BYTES = 4096
 SUPPORTED_MANIFEST_VERSION = 1
 
+DOWNLOAD_REQUEST_HEADERS = {
+    "Accept-Encoding": "identity",
+    "Connection": "close",
+}
+
 FORBIDDEN_FILENAMES = (
     "wifi_secrets.py",
     "time_state.json",
@@ -403,7 +408,11 @@ def _download_next_file(now_ms):
         if requests is None:
             raise RuntimeError("bibliotheque HTTP indisponible")
 
-        response = requests.get(file_entry["url"], stream=True)
+        response = requests.get(
+            file_entry["url"],
+            headers=DOWNLOAD_REQUEST_HEADERS,
+            stream=True,
+        )
         if response is None:
             raise RuntimeError("aucune reponse HTTP")
         status_code = getattr(response, "status_code", None)
