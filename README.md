@@ -1,142 +1,124 @@
 # tube_vintage
 
-## Phase 3.0.1
+## Correction 3.0.1.3
 
-Cette phase telecharge les fichiers d'une mise a jour Netlify vers des fichiers
-temporaires `<nom>.new`. Aucun fichier actif n'est remplace, aucun `.bak` n'est
-cree et l'ESP32 ne redemarre pas.
+Les fichiers OTA ne sont plus telecharges dans la boucle complete de
+`main_tempo.py`. Lorsque `updater.py` detecte une version distante superieure,
+l'application sauvegarde le profil utilisateur, cree un marqueur persistant,
+eteint les LED et redemarre vers un environnement OTA minimal.
 
-La version locale reste `3.0.0` dans `main_tempo.py`. Le manifeste de test
-annonce `3.0.1`, ce qui permet de valider le telechargement sans inclure ni
-remplacer `main_tempo.py`.
+Aucun fichier actif n'est remplace, aucun `.bak` n'est cree et aucun fichier
+`.new` n'est installe dans cette phase.
 
-## Manifeste Netlify
+## Profil utilisateur persistant
 
-`netlify/version.json` peut lister un seul fichier ou plusieurs fichiers. Seuls
-les fichiers effectivement presents dans `files` sont traites. Chaque entree
-exige :
+Avant le redemarrage OTA, `runtime_state.py` ecrit atomiquement
+`runtime_state.json` via `runtime_state.tmp` :
 
-- `name` : nom simple, non vide et sans chemin;
-- `url` : URL HTTPS non vide;
-- `size` : taille exacte, entiere et strictement positive;
-- `sha256` : empreinte hexadecimale complete de 64 caracteres.
+```json
+{
+  "version": 1,
+  "user_profile": "CALME"
+}
+```
 
-Les doublons, `..`, les chemins absolus, les barres obliques, les sous-dossiers
-et les noms terminant par `.new` ou `.bak` sont refuses. Sont egalement refuses
-les secrets, l'etat temporel, les marqueurs internes et les fichiers locaux npm,
-Git ou VS Code, notamment :
+La valeur sauvegardee est toujours le vrai profil choisi avec le bouton, meme
+si le profil effectif est temporairement `NUIT`. Au prochain lancement manuel
+de `main_tempo.py`, le profil est restaure s'il existe encore dans
+`config.PROFILES`; sinon le profil par defaut de `config.py` est utilise.
+
+## Marqueur OTA
+
+`updater.py` valide le manifeste, mais ne telecharge plus ses fichiers. Il cree
+atomiquement `ota_download_pending.json` via `ota_download_pending.tmp` :
+
+```json
+{
+  "version": 1,
+  "remote_version": "3.0.6",
+  "files": [
+    {
+      "name": "update_test_small.txt",
+      "url": "https://example.netlify.app/firmware/update_test_small.txt",
+      "size": 47,
+      "sha256": "empreinte-hexadecimale-de-64-caracteres"
+    }
+  ],
+  "attempts": 0
+}
+```
+
+Le marqueur contient toutes les donnees necessaires au telechargeur minimal. Il
+est revalide apres redemarrage : noms simples sans chemin, URL HTTPS, taille
+positive, SHA-256 complet et absence de doublons.
+
+## Selection au demarrage
+
+`boot.py` cherche uniquement le marqueur OTA :
+
+- s'il existe, `ota_downloader.py` est importe et execute;
+- sinon, le demarrage de developpement actuel est conserve et
+  `main_tempo.py` n'est pas lance automatiquement.
+
+Le mode minimal n'importe ni l'application LED, ni les profils, ni l'horaire,
+ni NTP, ni Open-Meteo, ni la logique nocturne. Il charge seulement le Wi-Fi, les
+secrets locaux, HTTP, SHA-256 et les petits modules d'etat OTA.
+
+## Telechargement minimal
+
+`ota_downloader.py` reutilise la methode validee par le test de vitesse :
+
+- bloc de 1024 octets;
+- tampon unique et `readinto()` prioritaire;
+- repli sur `read()`;
+- `Accept-Encoding: identity` et `Connection: close`;
+- arret exact a la taille annoncee, sans lecture d'EOF supplementaire;
+- ecriture `.new` et SHA-256 progressifs;
+- progression console tous les 16 Kio;
+- fermeture systematique et `gc.collect()`.
+
+Tous les fichiers doivent etre valides. Une seule erreur supprime tous les
+`.new` du lot. En cas de succes, les `.new` sont conserves et le marqueur
+atomique `ota_download_ready.json` contient :
+
+```json
+{
+  "version": 1,
+  "remote_version": "3.0.6",
+  "files": [
+    "update_test_small.txt.new",
+    "update_test_large.txt.new"
+  ]
+}
+```
+
+Le marqueur en attente est alors supprime et l'ESP32 redemarre. Aucune
+installation n'est effectuee.
+
+## Limite d'echecs
+
+Le compteur `attempts` est incremente atomiquement avant chaque tentative. Une
+erreur nettoie tous les `.new`, conserve une erreur courte et redemarre pour un
+nouvel essai. Apres trois echecs, le marqueur en attente est supprime et le
+systeme revient au demarrage normal, sans installation et sans boucle infinie.
+
+## Fichiers toujours exclus des mises a jour
 
 - `wifi_secrets.py`;
-- `time_state.json`;
-- `.gitignore`;
-- `package.json` et `package-lock.json`;
-- `pyrightconfig.json`;
-- `netlify.toml`.
+- `time_state.json` et `time_state.tmp`;
+- `runtime_state.json` et `runtime_state.tmp`;
+- `ota_download_pending.json` et son temporaire;
+- `ota_download_ready.json` et son temporaire;
+- tous les `.new` et `.bak`;
+- les marqueurs internes, fichiers npm, Git, VS Code et outils locaux.
 
-Les fichiers `.txt` de test sont autorises. Dans une future version,
-`config.py` pourra etre le seul fichier du manifeste et etre mis a jour seul.
+## Fonctionnement conserve
 
-## Telechargement en flux
+La version locale reste `3.0.0`. Les profils, valeurs visuelles, bouton,
+horaire 06:00-00:00, Wi-Fi, NTP, securite temporelle, Open-Meteo et profil
+`NUIT` automatique ne sont pas modifies.
 
-`updater.py` lit chaque reponse HTTPS depuis `response.raw` par blocs de
-1024 octets. Chaque bloc est immediatement :
-
-1. ecrit dans `<nom>.new`;
-2. ajoute au compteur de taille;
-3. transmis au calcul SHA-256 progressif.
-
-Le fichier complet n'est jamais charge en RAM. La reponse HTTP, le flux et le
-fichier local sont fermes dans tous les chemins, puis le verrou reseau est
-libere et `gc.collect()` est appele. Si la reponse MicroPython ne fournit pas de
-flux brut lisible, le telechargement echoue proprement.
-
-Avant la tentative, `os.statvfs()` est utilise lorsqu'il est disponible. La
-somme des tailles annoncees et une marge de 4096 octets doivent etre libres.
-Une erreur d'ecriture reste geree si cette fonction n'existe pas.
-
-## Validation et atomicite
-
-Apres chaque fichier, la taille recue doit correspondre exactement a `size` et
-le SHA-256 calcule doit correspondre au manifeste. Un fichier valide est garde
-sous son nom `.new`, sans etre charge ou importe.
-
-La tentative est atomique pour tout le lot : si un seul fichier echoue, le
-fichier incomplet et tous les `.new` deja valides pendant cette tentative sont
-supprimes. Les fichiers actifs ne sont jamais touches. Une nouvelle tentative
-est planifiee une heure plus tard, sans boucle rapide.
-
-Lorsque tous les fichiers sont valides, tous les `.new` sont conserves et l'etat
-RAM indique que le lot est complet. Aucune installation n'est effectuee.
-
-## Coordination reseau et memoire
-
-Open-Meteo garde la priorite. Netlify attend 60 secondes apres connexion et au
-moins 30 secondes apres une tentative solaire. Le verrou partage
-`network_request_lock.py` interdit deux requetes HTTPS simultanees et impose
-10 secondes entre deux fichiers. Les diagnostics affichent la memoire libre
-avant et apres chaque telechargement, le nombre total d'octets et la validation
-SHA-256, sans imprimer chaque bloc.
-
-## Fichiers de test
-
-- `netlify/firmware/update_test_small.txt` : petit contenu reconnaissable;
-- `netlify/firmware/update_test_large.txt` : fichier deterministe de 65 536
-  octets pour tester le flux et la memoire.
-
-Ces fichiers sont inertes : ils ne sont jamais importes ou executes.
-
-## Generation locale du manifeste
-
-Depuis Windows, a la racine du projet :
-
-```powershell
-python tools\generate_manifest.py
-```
-
-Le script recree les deux fichiers de test, calcule leur taille et leur SHA-256
-par blocs, puis regenere `netlify/version.json` avec les URL du site
-`tube-vintage-jeff.netlify.app`.
-
-## Diagnostic depuis Thonny
-
-La verification du manifeste reste forcable avec :
-
-```python
-import updater
-updater.force_check()
-```
-
-Lorsqu'une version plus recente et un manifeste valide sont connus, le
-telechargement est prepare automatiquement. Il peut aussi etre relance
-manuellement, sans installation :
-
-```python
-updater.start_download()
-```
-
-Etat lisible du telechargement :
-
-```python
-updater.get_download_state()
-```
-
-Etat complet de l'updater :
-
-```python
-updater.get_state()
-```
-
-## Fonctionnement existant conserve
-
-- cinq LED WS2812 sur GPIO 5 et bouton sur GPIO 27;
-- quatre profils, animations et profil `NUIT` automatique;
-- Wi-Fi non bloquant, NTP et heure locale du Quebec;
-- horaire automatique de 06:00 a 00:00;
-- securite et grace temporelles de 72 heures;
-- recuperation quotidienne du coucher du soleil;
-- extinction propre sur Ctrl+C et exception.
-
-## Demarrage dans Thonny
+## Lancement de developpement dans Thonny
 
 ```python
 exec(open("main_tempo.py").read())

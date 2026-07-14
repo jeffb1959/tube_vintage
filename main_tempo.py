@@ -1,4 +1,6 @@
 from machine import Pin
+import machine
+import gc
 import config
 import wifi_manager
 import neopixel
@@ -11,6 +13,7 @@ import sun_manager
 import night_profile_manager
 import updater
 import network_request_lock
+import runtime_state
 
 
 # Informations du programme
@@ -380,6 +383,11 @@ def main():
 
         profile_order = get_profile_order()
         user_profile_name, user_profile = get_initial_profile()
+        restored_profile_name = runtime_state.load_user_profile(profile_order)
+        if restored_profile_name is not None:
+            user_profile_name = restored_profile_name
+            user_profile = load_profile(user_profile_name)
+            print("Profil utilisateur restaure : " + user_profile_name)
         effective_profile_name = user_profile_name
         effective_profile = user_profile
 
@@ -419,6 +427,7 @@ def main():
         previous_button_state = button.value()
         last_button_reading = previous_button_state
         last_change_time = now_ms
+        ota_preparation_handled = False
 
         while True:
             now_ms = time.ticks_ms()
@@ -476,6 +485,28 @@ def main():
                     )
 
             updater.update(now_ms, wifi_manager.is_connected())
+
+            if (
+                updater.is_ota_preparation_requested()
+                and not ota_preparation_handled
+            ):
+                ota_preparation_handled = True
+                print("Mise a jour : preparation du mode OTA minimal")
+                if runtime_state.save_user_profile(user_profile_name):
+                    print(
+                        "Mise a jour : profil utilisateur enregistre : "
+                        + user_profile_name
+                    )
+                    if updater.prepare_ota_marker():
+                        print("Mise a jour : marqueur OTA cree")
+                        leds_are_on = False
+                        apply_auto_off(leds, flash_state, indicator_state)
+                        gc.collect()
+                        print(
+                            "Mise a jour : redemarrage vers le mode OTA minimal"
+                        )
+                        time.sleep_ms(500)
+                        machine.reset()
 
             sunset = sun_manager.get_sunset()
             night_event = night_profile_manager.update(local_time, sunset)

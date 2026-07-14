@@ -1,17 +1,7 @@
 import gc
-import os
 import time
+import ota_state
 import network_request_lock
-
-try:
-    import uhashlib as hashlib
-except ImportError:
-    import hashlib
-
-try:
-    import ubinascii as binascii
-except ImportError:
-    import binascii
 
 try:
     import urequests as requests
@@ -22,29 +12,24 @@ except ImportError:
         requests = None
 
 
-# Remplacer ce domaine par l'URL reelle du site Netlify avant le deploiement.
-VERSION_MANIFEST_URL = "https://tube-vintage-jeff.netlify.app/version.json"
-
+VERSION_MANIFEST_URL = "https://tube-vintage-jfb.netlify.app/version.json"
 UPDATE_INITIAL_DELAY_MS = 60 * 1000
 UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 UPDATE_RETRY_DELAY_MS = 60 * 60 * 1000
 UPDATE_LOCK_RETRY_DELAY_MS = 5 * 1000
 UPDATE_DELAY_AFTER_SUN_MS = 30 * 1000
-DOWNLOAD_FILE_GAP_MS = 10 * 1000
-DOWNLOAD_BLOCK_SIZE = 1024
-DOWNLOAD_PROGRESS_INTERVAL_BYTES = 4 * 1024
-DOWNLOAD_SOCKET_TIMEOUT_SECONDS = 20
-DOWNLOAD_SPACE_MARGIN_BYTES = 4096
 SUPPORTED_MANIFEST_VERSION = 1
-
-DOWNLOAD_REQUEST_HEADERS = {
-    "Accept-Encoding": "identity",
-    "Connection": "close",
-}
 
 FORBIDDEN_FILENAMES = (
     "wifi_secrets.py",
     "time_state.json",
+    "runtime_state.json",
+    "runtime_state.tmp",
+    "ota_download_pending.json",
+    "ota_download_pending.tmp",
+    "ota_download_ready.json",
+    "ota_download_ready.tmp",
+    "time_state.tmp",
     ".gitignore",
     "package.json",
     "package-lock.json",
@@ -59,20 +44,14 @@ _state = {
     "remote_version": None,
     "manifest_files": [],
     "update_available": False,
+    "ota_preparation_requested": False,
+    "ota_preparation_attempted": False,
     "wifi_connected": False,
     "next_check_ms": None,
     "in_progress": False,
     "last_error": None,
     "check_completed": False,
     "first_attempt_started": False,
-    "download_requested": False,
-    "download_in_progress": False,
-    "download_current_file": None,
-    "download_files_completed": 0,
-    "download_files_total": 0,
-    "download_complete": False,
-    "download_new_files": [],
-    "download_next_attempt_ms": None,
 }
 
 
@@ -82,7 +61,6 @@ def _parse_version(version):
     parts = version.split(".")
     if len(parts) != 3:
         return None
-
     numbers = []
     for part in parts:
         if not part or not all("0" <= character <= "9" for character in part):
@@ -109,28 +87,14 @@ def initialize(local_version):
     _state["remote_version"] = None
     _state["manifest_files"] = []
     _state["update_available"] = False
+    _state["ota_preparation_requested"] = False
+    _state["ota_preparation_attempted"] = False
     _state["wifi_connected"] = False
     _state["next_check_ms"] = None
     _state["in_progress"] = False
     _state["last_error"] = None
     _state["check_completed"] = False
     _state["first_attempt_started"] = False
-    _reset_download_state()
-
-    if _parse_version(local_version) is None:
-        _state["last_error"] = "version locale invalide"
-        print("Mise a jour : version locale invalide")
-
-
-def _reset_download_state():
-    _state["download_requested"] = False
-    _state["download_in_progress"] = False
-    _state["download_current_file"] = None
-    _state["download_files_completed"] = 0
-    _state["download_files_total"] = 0
-    _state["download_complete"] = False
-    _state["download_new_files"] = []
-    _state["download_next_attempt_ms"] = None
 
 
 def _is_safe_filename(name):
@@ -144,8 +108,6 @@ def _is_safe_filename(name):
     if lower_name in FORBIDDEN_FILENAMES:
         return False
     if lower_name.startswith(("npm-", "git-", "vscode-", "update_marker")):
-        return False
-    if lower_name in ("update_state.json", "update_pending", "update_marker"):
         return False
     return True
 
@@ -161,11 +123,9 @@ def _validate_manifest(data):
         return None
     if data.get("manifest_version") != SUPPORTED_MANIFEST_VERSION:
         return None
-
     remote_version = data.get("version")
     if _parse_version(remote_version) is None:
         return None
-
     files = data.get("files")
     if not isinstance(files, list) or not files:
         return None
@@ -189,112 +149,76 @@ def _validate_manifest(data):
             return None
         if not isinstance(sha256, str) or not _is_valid_sha256(sha256):
             return None
-
         seen_names.append(name.lower())
         normalized_files.append(
-            {
-                "name": name,
-                "url": url,
-                "size": size,
-                "sha256": sha256.lower(),
-            }
+            {"name": name, "url": url, "size": size, "sha256": sha256.lower()}
         )
-
     return {"version": remote_version, "files": normalized_files}
 
 
-def _schedule_check_retry(now_ms):
+def _schedule_retry(now_ms):
     _state["next_check_ms"] = time.ticks_add(now_ms, UPDATE_RETRY_DELAY_MS)
     print("Mise a jour : nouvelle tentative dans 1 heure")
-
-
-def _print_free_memory(label):
-    mem_free = getattr(gc, "mem_free", None)
-    if callable(mem_free):
-        print("Memoire libre " + label + " : " + str(mem_free()))
 
 
 def _check_manifest(now_ms):
     if not _state["first_attempt_started"]:
         last_sun_release_ms = network_request_lock.get_last_release_ms("sun")
         if last_sun_release_ms is None:
-            _state["next_check_ms"] = time.ticks_add(
-                now_ms, UPDATE_LOCK_RETRY_DELAY_MS
-            )
+            _state["next_check_ms"] = time.ticks_add(now_ms, UPDATE_LOCK_RETRY_DELAY_MS)
             return False
-        earliest_check_ms = time.ticks_add(
-            last_sun_release_ms, UPDATE_DELAY_AFTER_SUN_MS
-        )
-        if time.ticks_diff(now_ms, earliest_check_ms) < 0:
-            _state["next_check_ms"] = earliest_check_ms
+        earliest_ms = time.ticks_add(last_sun_release_ms, UPDATE_DELAY_AFTER_SUN_MS)
+        if time.ticks_diff(now_ms, earliest_ms) < 0:
+            _state["next_check_ms"] = earliest_ms
             return False
 
     if not network_request_lock.try_acquire("updater", now_ms):
-        _state["next_check_ms"] = time.ticks_add(
-            now_ms, UPDATE_LOCK_RETRY_DELAY_MS
-        )
+        _state["next_check_ms"] = time.ticks_add(now_ms, UPDATE_LOCK_RETRY_DELAY_MS)
         return False
 
-    _state["first_attempt_started"] = True
     response = None
     payload = None
+    _state["first_attempt_started"] = True
     _state["in_progress"] = True
-    _state["check_completed"] = False
     _state["last_error"] = None
     print("Mise a jour : verification du manifeste")
-
     try:
         gc.collect()
-        _print_free_memory("avant Mise a jour")
         if requests is None:
             raise RuntimeError("bibliotheque HTTP indisponible")
-
         response = requests.get(VERSION_MANIFEST_URL)
         if response is None:
             raise RuntimeError("aucune reponse HTTP")
-
         status_code = getattr(response, "status_code", None)
         if status_code is not None and not 200 <= status_code < 300:
             raise RuntimeError("HTTP " + str(status_code))
-
         payload = response.json()
         manifest = _validate_manifest(payload)
         payload = None
         if manifest is None:
             raise RuntimeError("manifeste invalide")
-
-        remote_version = manifest["version"]
-        comparison = compare_versions(remote_version, _state["local_version"])
+        comparison = compare_versions(manifest["version"], _state["local_version"])
         if comparison is None:
             raise RuntimeError("version mal formee")
 
-        previous_remote_version = _state["remote_version"]
-        if (
-            previous_remote_version is not None
-            and previous_remote_version != remote_version
-        ):
-            _cleanup_download_attempt()
-            _reset_download_state()
-
-        _state["remote_version"] = remote_version
+        _state["remote_version"] = manifest["version"]
         _state["manifest_files"] = manifest["files"]
         _state["update_available"] = comparison > 0
+        _state["ota_preparation_requested"] = comparison > 0
+        _state["ota_preparation_attempted"] = False
         _state["check_completed"] = True
         _state["next_check_ms"] = time.ticks_add(now_ms, UPDATE_CHECK_INTERVAL_MS)
-
         print("Mise a jour : version locale " + _state["local_version"])
-        print("Mise a jour : version distante " + remote_version)
-        if _state["update_available"]:
-            print("Mise a jour : nouvelle version " + remote_version + " disponible")
-            if not _state["download_complete"]:
-                start_download(now_ms)
+        print("Mise a jour : version distante " + manifest["version"])
+        if comparison > 0:
+            print("Mise a jour : nouvelle version " + manifest["version"] + " disponible")
         else:
             print("Mise a jour : aucune mise a jour disponible")
         return True
     except Exception as error:
         _state["last_error"] = str(error)
         print("Mise a jour : echec : " + str(error))
-        _schedule_check_retry(now_ms)
+        _schedule_retry(now_ms)
         return False
     finally:
         if response is not None:
@@ -307,326 +231,43 @@ def _check_manifest(now_ms):
         _state["in_progress"] = False
         network_request_lock.release("updater", time.ticks_ms())
         gc.collect()
-        _print_free_memory("apres Mise a jour")
-
-
-def _remove_if_present(path):
-    try:
-        os.remove(path)
-    except OSError:
-        pass
-
-
-def _cleanup_download_attempt():
-    paths = list(_state["download_new_files"])
-    current_name = _state["download_current_file"]
-    if current_name is not None:
-        current_path = current_name + ".new"
-        if current_path not in paths:
-            paths.append(current_path)
-
-    for path in paths:
-        _remove_if_present(path)
-
-    _state["download_new_files"] = []
-    if paths:
-        print("Mise a jour : nettoyage des fichiers .new")
-
-
-def _has_enough_free_space(files):
-    statvfs = getattr(os, "statvfs", None)
-    if not callable(statvfs):
-        return True
-    try:
-        filesystem = statvfs(".")
-        if not isinstance(filesystem, tuple) or len(filesystem) < 5:
-            return True
-        free_bytes = filesystem[1] * filesystem[4]
-        required_bytes = 0
-        for file_entry in files:
-            if not isinstance(file_entry, dict):
-                return False
-            file_size = file_entry.get("size")
-            if not isinstance(file_size, int):
-                return False
-            required_bytes += file_size
-        return free_bytes >= required_bytes + DOWNLOAD_SPACE_MARGIN_BYTES
-    except (OSError, TypeError, IndexError):
-        return True
-
-
-def _sha256_hex(hasher):
-    return binascii.hexlify(hasher.digest()).decode().lower()
-
-
-def _get_response_header(response, header_name):
-    headers = getattr(response, "headers", None)
-    if not isinstance(headers, dict):
-        return None
-
-    expected_name = header_name.lower()
-    for name, value in headers.items():
-        if isinstance(name, str) and name.lower() == expected_name:
-            return str(value).strip()
-    return None
-
-
-def _fail_download(now_ms, error):
-    _state["last_error"] = str(error)
-    print("Mise a jour : " + str(error))
-    _cleanup_download_attempt()
-    _state["download_in_progress"] = False
-    _state["download_current_file"] = None
-    _state["download_files_completed"] = 0
-    _state["download_complete"] = False
-    _state["download_requested"] = True
-    _state["download_next_attempt_ms"] = time.ticks_add(
-        now_ms, UPDATE_RETRY_DELAY_MS
-    )
-    print("Mise a jour : nouvelle tentative planifiee dans 1 heure")
-
-
-def _download_next_file(now_ms):
-    files = _state["manifest_files"]
-    file_index = _state["download_files_completed"]
-    if file_index == 0 and not _state["download_new_files"]:
-        if not _has_enough_free_space(files):
-            _fail_download(now_ms, "espace disque insuffisant")
-            return False
-
-    if file_index >= len(files):
-        return False
-    file_entry = files[file_index]
-    filename = file_entry["name"]
-    target_path = filename + ".new"
-
-    if not network_request_lock.try_acquire("updater-download", now_ms):
-        _state["download_next_attempt_ms"] = time.ticks_add(
-            now_ms, UPDATE_LOCK_RETRY_DELAY_MS
-        )
-        return False
-
-    response = None
-    output_file = None
-    stream = None
-    chunk = None
-    read_buffer = None
-    buffer_view = None
-    data_view = None
-    _state["download_in_progress"] = True
-    _state["download_current_file"] = filename
-    print("Mise a jour : telechargement de " + filename)
-
-    try:
-        gc.collect()
-        _print_free_memory("avant telechargement")
-        if requests is None:
-            raise RuntimeError("bibliotheque HTTP indisponible")
-
-        print("Mise a jour : ouverture HTTP")
-        response = requests.get(
-            file_entry["url"],
-            headers=DOWNLOAD_REQUEST_HEADERS,
-            stream=True,
-        )
-        print("Mise a jour : reponse HTTP recue")
-        if response is None:
-            raise RuntimeError("aucune reponse HTTP")
-        status_code = getattr(response, "status_code", None)
-        if status_code is not None and not 200 <= status_code < 300:
-            raise RuntimeError("HTTP " + str(status_code))
-
-        expected_size = file_entry["size"]
-        content_length = _get_response_header(response, "Content-Length")
-        content_encoding = _get_response_header(response, "Content-Encoding")
-        transfer_encoding = _get_response_header(response, "Transfer-Encoding")
-        if content_length is not None:
-            print("Mise a jour : Content-Length = " + content_length)
-        if content_encoding is not None:
-            print("Mise a jour : Content-Encoding = " + content_encoding)
-        if transfer_encoding is not None:
-            print("Mise a jour : Transfer-Encoding = " + transfer_encoding)
-
-        if content_encoding is not None and content_encoding.lower() not in (
-            "",
-            "identity",
-        ):
-            raise RuntimeError("encodage HTTP non pris en charge")
-        if content_length is not None and content_length.isdigit():
-            if int(content_length) != expected_size:
-                raise RuntimeError("taille HTTP invalide")
-
-        stream = getattr(response, "raw", None)
-        read_into = getattr(stream, "readinto", None)
-        read_chunk = getattr(stream, "read", None)
-        if not callable(read_into) and not callable(read_chunk):
-            raise RuntimeError("lecture HTTP en flux indisponible")
-        print("Mise a jour : flux HTTP pret")
-
-        set_timeout = getattr(stream, "settimeout", None)
-        if callable(set_timeout):
-            try:
-                set_timeout(DOWNLOAD_SOCKET_TIMEOUT_SECONDS)
-            except Exception:
-                pass
-
-        received_bytes = 0
-        next_progress_bytes = DOWNLOAD_PROGRESS_INTERVAL_BYTES
-        diagnose_each_read = filename == "update_test_large.txt"
-        read_buffer = bytearray(DOWNLOAD_BLOCK_SIZE)
-        buffer_view = memoryview(read_buffer)
-        hasher = hashlib.sha256()
-        output_file = open(target_path, "wb")
-        print("Mise a jour : debut lecture")
-        while received_bytes < expected_size:
-            remaining_bytes = expected_size - received_bytes
-            read_size = min(DOWNLOAD_BLOCK_SIZE, remaining_bytes)
-            if diagnose_each_read:
-                print("Mise a jour : lecture demandee, recus = %d" % received_bytes)
-
-            if callable(read_into):
-                target_view = buffer_view[:read_size]
-                bytes_read = read_into(target_view)
-                if not isinstance(bytes_read, int):
-                    raise RuntimeError("lecture HTTP invalide")
-                if diagnose_each_read:
-                    print("Mise a jour : lecture recue, octets = %d" % bytes_read)
-                if bytes_read <= 0:
-                    raise RuntimeError("taille invalide : flux tronque")
-                if bytes_read > read_size:
-                    raise RuntimeError("taille invalide")
-                data_view = buffer_view[:bytes_read]
-                output_file.write(data_view)
-                hasher.update(data_view)
-                received_bytes += bytes_read
-            else:
-                if not callable(read_chunk):
-                    raise RuntimeError("lecture HTTP en flux indisponible")
-                chunk = read_chunk(read_size)
-                chunk_size = len(chunk) if isinstance(chunk, (bytes, bytearray)) else 0
-                if diagnose_each_read:
-                    print("Mise a jour : lecture recue, octets = %d" % chunk_size)
-                if not chunk:
-                    raise RuntimeError("taille invalide : flux tronque")
-                if not isinstance(chunk, (bytes, bytearray)):
-                    raise RuntimeError("bloc HTTP invalide")
-                if len(chunk) > read_size:
-                    raise RuntimeError("taille invalide")
-                output_file.write(chunk)
-                hasher.update(chunk)
-                received_bytes += len(chunk)
-
-            while received_bytes >= next_progress_bytes:
-                print(
-                    "Mise a jour : %d / %d octets"
-                    % (next_progress_bytes, expected_size)
-                )
-                next_progress_bytes += DOWNLOAD_PROGRESS_INTERVAL_BYTES
-
-        output_file.close()
-        output_file = None
-        calculated_sha256 = _sha256_hex(hasher)
-        print("Mise a jour : %d octets recus" % received_bytes)
-        if received_bytes != expected_size:
-            raise RuntimeError("taille invalide")
-        print("Mise a jour : taille valide")
-        if calculated_sha256 != file_entry["sha256"]:
-            raise RuntimeError("SHA-256 invalide")
-        print("Mise a jour : SHA-256 valide")
-
-        _state["download_new_files"].append(target_path)
-        _state["download_files_completed"] += 1
-        _state["download_current_file"] = None
-        print("Mise a jour : fichier conserve sous " + target_path)
-
-        if _state["download_files_completed"] == len(files):
-            _state["download_requested"] = False
-            _state["download_complete"] = True
-            _state["download_next_attempt_ms"] = None
-            print("Mise a jour : tous les fichiers telecharges et valides")
-            print("Mise a jour : aucune installation effectuee")
-        else:
-            _state["download_next_attempt_ms"] = time.ticks_add(
-                now_ms, DOWNLOAD_FILE_GAP_MS
-            )
-        return True
-    except KeyboardInterrupt:
-        if output_file is not None:
-            try:
-                output_file.close()
-            except Exception:
-                pass
-            output_file = None
-        if response is not None:
-            try:
-                response.close()
-            except Exception:
-                pass
-            response = None
-        _cleanup_download_attempt()
-        raise
-    except Exception as error:
-        if output_file is not None:
-            try:
-                output_file.close()
-            except Exception:
-                pass
-            output_file = None
-        if response is not None:
-            try:
-                response.close()
-            except Exception:
-                pass
-            response = None
-        _fail_download(now_ms, error)
-        return False
-    finally:
-        if output_file is not None:
-            try:
-                output_file.close()
-            except Exception:
-                pass
-        if response is not None:
-            try:
-                response.close()
-            except Exception:
-                pass
-        output_file = None
-        response = None
-        stream = None
-        chunk = None
-        read_buffer = None
-        buffer_view = None
-        data_view = None
-        _state["download_in_progress"] = False
-        network_request_lock.release("updater-download", time.ticks_ms())
-        gc.collect()
-        _print_free_memory("apres telechargement")
 
 
 def update(now_ms, wifi_connected):
     if not _state["initialized"] or _state["in_progress"]:
         return False
-
     wifi_connected = bool(wifi_connected)
     newly_connected = wifi_connected and not _state["wifi_connected"]
     _state["wifi_connected"] = wifi_connected
     if not wifi_connected:
         _state["next_check_ms"] = None
         return False
-
-    if _state["download_requested"] and not _state["download_in_progress"]:
-        next_download_ms = _state["download_next_attempt_ms"]
-        if next_download_ms is None or time.ticks_diff(now_ms, next_download_ms) >= 0:
-            return _download_next_file(now_ms)
-
+    if _state["ota_preparation_requested"]:
+        return False
     if newly_connected or _state["next_check_ms"] is None:
         _state["next_check_ms"] = time.ticks_add(now_ms, UPDATE_INITIAL_DELAY_MS)
     if time.ticks_diff(now_ms, _state["next_check_ms"]) < 0:
         return False
-
     _state["next_check_ms"] = None
     return _check_manifest(now_ms)
+
+
+def is_ota_preparation_requested():
+    return bool(
+        _state["ota_preparation_requested"]
+        and not _state["ota_preparation_attempted"]
+    )
+
+
+def prepare_ota_marker():
+    if not _state["ota_preparation_requested"]:
+        return False
+    _state["ota_preparation_attempted"] = True
+    if not ota_state.create_pending(_state["remote_version"], _state["manifest_files"]):
+        _state["last_error"] = "creation du marqueur OTA impossible"
+        return False
+    _state["ota_preparation_requested"] = False
+    return True
 
 
 def is_update_available():
@@ -644,36 +285,24 @@ def force_check(now_ms=None):
 
 
 def start_download(now_ms=None):
-    if not _state["update_available"] or not _state["manifest_files"]:
-        _state["last_error"] = "aucune mise a jour telechargeable"
+    if not _state["update_available"]:
         return False
-    if _state["download_in_progress"]:
-        return False
-    if now_ms is None:
-        now_ms = time.ticks_ms()
-
-    _cleanup_download_attempt()
-    _state["download_requested"] = True
-    _state["download_current_file"] = None
-    _state["download_files_completed"] = 0
-    _state["download_files_total"] = len(_state["manifest_files"])
-    _state["download_complete"] = False
-    _state["download_next_attempt_ms"] = now_ms
-    _state["last_error"] = None
+    _state["ota_preparation_requested"] = True
+    _state["ota_preparation_attempted"] = False
     return True
 
 
 def get_download_state():
     return {
-        "in_progress": _state["download_in_progress"],
-        "requested": _state["download_requested"],
-        "current_file": _state["download_current_file"],
-        "files_completed": _state["download_files_completed"],
-        "files_total": _state["download_files_total"],
+        "in_progress": False,
+        "requested": _state["ota_preparation_requested"],
+        "current_file": None,
+        "files_completed": 0,
+        "files_total": len(_state["manifest_files"]),
         "last_error": _state["last_error"],
-        "complete": _state["download_complete"],
-        "validated_new_files": list(_state["download_new_files"]),
-        "next_attempt_ms": _state["download_next_attempt_ms"],
+        "complete": False,
+        "validated_new_files": [],
+        "next_attempt_ms": None,
     }
 
 
@@ -682,10 +311,10 @@ def get_state():
         "local_version": _state["local_version"],
         "remote_version": _state["remote_version"],
         "update_available": _state["update_available"],
+        "ota_preparation_requested": _state["ota_preparation_requested"],
+        "ota_preparation_attempted": _state["ota_preparation_attempted"],
         "next_check_ms": _state["next_check_ms"],
         "last_error": _state["last_error"],
         "in_progress": _state["in_progress"],
         "check_completed": _state["check_completed"],
-        "first_attempt_started": _state["first_attempt_started"],
-        "download": get_download_state(),
     }
