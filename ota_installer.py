@@ -6,7 +6,7 @@ import ota_state
 
 RESET_DELAY_MS = 1000
 
-# Diagnostic manuel de la phase 3.0.2. Utiliser 1 pour provoquer une erreur
+# Diagnostic manuel de la phase 3.0.3. Utiliser 1 pour provoquer une erreur
 # avant l'installation du deuxieme fichier, puis remettre None.
 INSTALL_TEST_FAIL_ON_INDEX = None
 
@@ -34,7 +34,9 @@ def _cleanup_new_files(files):
 def _verify_new_files(files):
     print("OTA installateur : verification des fichiers .new")
     for file_entry in files:
-        name = file_entry["name"]
+        name = file_entry.get("name")
+        if not isinstance(name, str):
+            raise RuntimeError("nom invalide : " + str(file_entry))
         if not ota_state.is_installable_name(name):
             raise RuntimeError("nom interdit : " + name)
         if not _exists(name + ".new"):
@@ -81,6 +83,8 @@ def run():
     operations = []
     current_name = "fichier inconnu"
     ota_state.remove_install_ready()
+    ota_state.remove_update_confirmed()
+    ota_state.remove_boot_pending()
 
     try:
         _verify_new_files(files)
@@ -116,6 +120,24 @@ def run():
             marker["remote_version"], installed_files
         ):
             raise RuntimeError("creation du statut d'installation impossible")
+
+        boot_marker_files = []
+        for file_entry in files:
+            name = file_entry["name"]
+            backup_path = name + ".bak"
+            had_previous_file = _exists(backup_path)
+            boot_marker_files.append(
+                {
+                    "name": name,
+                    "backup": backup_path,
+                    "had_previous_file": had_previous_file,
+                }
+            )
+
+        if not ota_state.create_boot_pending(
+            marker["remote_version"], boot_marker_files, ota_state.OTA_BOOT_CONFIRM_MAX_ATTEMPTS
+        ):
+            raise RuntimeError("creation du marqueur de confirmation impossible")
 
         ota_state.remove_install_pending()
         ota_state.remove_ready()

@@ -1,27 +1,26 @@
 # tube_vintage
 
-## Phase 3.0.2
+## Phase 3.0.3 — confirmation de démarrage OTA
 
-Le flux OTA est maintenant en deux temps :
+Le flux OTA reste en trois états :
 
-- Téléchargement vers des fichiers `.new` en environnement minimal ;
-- Installation minimale ensuite, après redémarrage, pour convertir `.new` en fichiers finaux avec sauvegarde `.bak`.
+1. `ota_download_pending.json` / `ota_download_ready.json` (téléchargement validé)
+2. `ota_install_pending.json` (installation en cours)
+3. `ota_boot_pending.json` (nouvelle version en cours de confirmation)
 
-La version de l'application ne bascule pas encore automatiquement avec confirmation de démarrage ni rollback automatique après redémarrage.
+`main.py` n’est pas encore mis à jour par OTA dans cette phase, mais la version active peut être confirmée après un démarrage stable.
 
-## Manifeste Netlify
+## Manifeste Netlify (version de test)
 
-Le manifeste référence des fichiers locaux destinés aux tests OTA :
+`netlify/version.json` référence maintenant :
 
-- `install_test_small.txt` provient de `update_test_small.txt`
-- `install_test_large.txt` provient de `update_test_large.txt`
-
-Exemple de structure :
+- `install_test_small.txt` (depuis `update_test_small.txt`)
+- `install_test_large.txt` (depuis `update_test_large.txt`)
 
 ```json
 {
   "manifest_version": 1,
-  "version": "3.0.6",
+  "version": "3.0.7",
   "files": [
     {
       "name": "install_test_small.txt",
@@ -39,139 +38,111 @@ Exemple de structure :
 }
 ```
 
-Les fichiers distants sont téléchargés sous `name + ".new"` :
+## Ordre de démarrage `boot.py`
 
-- `install_test_small.txt.new`
-- `install_test_large.txt.new`
+1. `ota_boot_pending.json` (priorité haute) :
+   - incrémente `boot_attempts`
+   - laisse démarrer `main.py` tant que la limite n’est pas dépassée
+   - si dépassée, lance `ota_rollback.py`
+2. `ota_install_pending.json` → `ota_installer.py`
+3. `ota_download_pending.json` → `ota_downloader.py`
+4. sinon, démarrage normal `main.py`
 
-## Démarrage OTA au boot
+## Nouveau marqueur de confirmation `ota_boot_pending.json`
 
-`boot.py` applique désormais la priorité :
-
-1. Si `ota_install_pending.json` existe : lancer `ota_installer.py` ;
-2. Sinon si `ota_download_pending.json` existe : lancer `ota_downloader.py` ;
-3. Sinon : laisser le démarrage normal de MicroPython (`main.py`).
-
-Pendant un cycle installateur, `main.py` n’est pas lancé manuellement.
-
-## Marqueurs
-
-### `ota_download_pending.json` (téléchargement)
-
-Créé par `updater.py` après détection d’une version plus récente.
-
-### `ota_install_pending.json` (installation)
-
-Créé par `ota_downloader.py` uniquement après :
-
-- téléchargement réussi,
-- validation de la taille,
-- validation SHA-256,
-- présence des `.new`.
-
-Format minimal requis :
+Créé par `ota_installer.py` après une installation réussie :
 
 ```json
 {
   "version": 1,
-  "remote_version": "3.0.6",
+  "remote_version": "3.0.7",
   "files": [
     {
-      "name": "install_test_small.txt"
-    },
-    {
-      "name": "install_test_large.txt"
+      "name": "install_test_small.txt",
+      "backup": "install_test_small.txt.bak",
+      "had_previous_file": true
     }
-  ]
+  ],
+  "boot_attempts": 0,
+  "max_boot_attempts": 3
 }
 ```
 
-### `ota_install_ready.json` (optionnel)
+Un fichier sans version précédente est représenté avec `"had_previous_file": false`.
 
-Créé après installation réussie.
+## Fichiers créés
 
-## Module `ota_installer.py`
+- `ota_rollback.py`
+- `ota_boot_pending.json` (marqueur dynamique)
+- `ota_update_confirmed.json` (facultatif, créé quand la confirmation réussit)
 
-`ota_installer.py` est minimal et ne dépend que de :
+## Comportement installateur
 
-- `os`
-- `time`
-- `machine`
-- `ota_state` (lecture/écriture marqueurs, validation noms)
+`ota_installer.py` :
 
-### Comportement d’installation
+- vérifie tous les `.new`,
+- crée les `.bak` des fichiers existants,
+- installe les `.new`,
+- en cas d’échec, restaure immédiatement les fichiers déjà installés,
+- crée `ota_boot_pending.json` uniquement si :
+  - tous les fichiers sont installés,
+  - tous les `.bak` requis existent,
+  - aucune erreur d’installation n’est survenue.
 
-Pour chaque nom de fichier du marqueur :
+`ota_state.py` contient :
+- création / chargement / suppression de `ota_boot_pending.json`,
+- validation stricte du marqueur,
+- `confirm_boot_success()` :
+  - supprime les `.bak`,
+  - supprime le marqueur,
+  - peut créer `ota_update_confirmed.json`.
 
-1. vérification préalable de `<name>.new` ;
-2. suppression d’un `.bak` existant uniquement dans le flux contrôlé de test ;
-3. sauvegarde de `<name>` en `<name>.bak` si présent ;
-4. remplacement de `<name>.new` vers `<name>` ;
-5. journalisation des étapes pour restauration.
+## Restaurateur `ota_rollback.py`
 
-En cas d’échec :
+- vérifie la présence de `ota_boot_pending.json`,
+- restaure les fichiers selon `had_previous_file` :
+  - si `true` : remplace le nouveau fichier par son `.bak`,
+  - si `false` : supprime le fichier installé,
+- nettoie les `.new`,
+- retire les marqueurs de confirmation partiels,
+- crée `ota_rollback_done.json` en cas de restauration incomplète,
+- redémarre vers la version précédente.
 
-- arrêt immédiat ;
-- restauration de toutes les opérations déjà réalisées (ordre inverse) ;
-- nettoyage des `.new` ;
-- suppression des marqueurs d’installation ;
-- redémarrage vers `main.py`.
+## Limite de tentative
 
-### Simulation d’échec
+- `MAX_ATTEMPTS = 3` (défaut)
+- tentatives 1..3 : la version peut démarrer
+- à la tentative 4 : rollback automatique
 
-Un drapeau de diagnostic est présent dans `ota_installer.py` :
+## Simulation de rollback volontaire
 
-`INSTALL_TEST_FAIL_ON_INDEX = 1`
+- paramètre présent dans `main.py` : `SIMULATE_NO_BOOT_CONFIRM`
+- valeur par défaut : `False`
+- passer à `True` pour empêcher la confirmation et déclencher le rollback après dépassement du seuil.
 
-- `None` par défaut (mode normal)
-- `1` provoque une erreur au second fichier pour valider la restauration.
+## Messages de référence
 
-## Fichiers interdits aux fichiers installables
+- démarrage de confirmation : `OTA : demarrage de la nouvelle version a confirmer`
+- tentative de démarrage : `OTA : tentative de demarrage X / 3`
+- confirmation OK : `OTA : nouvelle version stable`
+- confirmation faite : `OTA : demarrage confirme`
+- suppression backups : `OTA : suppression des sauvegardes .bak terminee`
+- rollback : 
+  - `OTA rollback : demarrage`
+  - `OTA rollback : restauration de ...`
+  - `OTA rollback : restauration terminee`
+  - `OTA rollback : redemarrage vers l'ancienne version`
 
-La validation bloque :
+## Fichiers critiques bloqués aux OTA
 
-- `wifi_secrets.py`
-- `time_state.json`
-- `runtime_state.json`
-- `ota_download_pending.json`
-- `ota_download_ready.json`
-- `ota_install_pending.json`
-- `ota_install_ready.json`
-- tous les `.new`
-- tous les `.bak`
-- marqueurs internes OTA
-- profils/ressources actives (ex. `main.py`, `config.py`, `boot.py`) et fichiers de développement.
+`wifi_secrets.py`, `time_state.json`, `runtime_state.json`,
+`ota_download_pending.json`, `ota_download_ready.json`,
+`ota_install_pending.json`, `ota_install_ready.json`,
+`ota_boot_pending.json`, `ota_update_confirmed.json`,
+`ota_rollback_done.json`, tous les `.new`, tous les `.bak`, marqueurs OTA internes.
 
-## Tests de base à documenter
+## Ce qui reste inchangé
 
-### Test 1 : installation réussie
-
-1. Créer manuellement sur l’ESP32 :
-   - `install_test_small.txt` avec `ANCIEN CONTENU PETIT`
-   - `install_test_large.txt` avec `ANCIEN CONTENU GROS`
-2. Lancer la mise à jour OTA (téléchargement + redémarrage).
-3. Vérifier après retour :
-   - `install_test_small.txt` contient le nouveau contenu,
-   - `install_test_small.txt.bak` contient `ANCIEN CONTENU PETIT`,
-   - `install_test_large.txt` contient le nouveau contenu,
-   - `install_test_large.txt.bak` contient `ANCIEN CONTENU GROS`,
-   - aucun `.new` résiduel.
-
-### Test 2 : échec simulé sur le second fichier
-
-1. Réinitialiser les anciens contenus.
-2. Activer `INSTALL_TEST_FAIL_ON_INDEX = 1` dans `ota_installer.py`.
-3. Relancer le cycle.
-4. Vérifier :
-   - le premier fichier revenu à son ancien contenu,
-   - le second fichier non mélangé (ancien contenu maintenu),
-   - aucun `.new`/final incorrect,
-   - retour correct vers `main.py`.
-
-## Comportements conservés en phase 3.0.2
-
-- `main.py`, `config.py`, modules actifs, Wi-Fi/NTP/LED/profil logique, modules solaires et logique horaire ne sont pas modifiés pour l’OTA.
-- pas de confirmation de démarrage,
-- pas de compteur de redémarrages de version,
-- pas d’effacement automatique des `.bak`,
-- pas de remplacement réel de `main.py` / `config.py`.
+- confirmation uniquement via marqueur `ota_boot_pending.json` (pas de mécanisme externe),
+- pas d’installation OTA réelle de `main.py` / `config.py` dans cette phase,
+- pas de récupération OTA automatique avant version suivante.

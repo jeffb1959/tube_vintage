@@ -14,10 +14,13 @@ import night_profile_manager
 import updater
 import network_request_lock
 import runtime_state
+import ota_state
 
 
 # Informations du programme
 PROGRAM_VERSION = "3.0.0"
+OTA_BOOT_CONFIRM_DELAY_MS = 30 * 1000
+SIMULATE_NO_BOOT_CONFIRM = False
 
 # Configuration materielle
 DATA_PIN = 5
@@ -427,10 +430,29 @@ def main():
         previous_button_state = button.value()
         last_button_reading = previous_button_state
         last_change_time = now_ms
+        ota_boot_confirmed = False
+        ota_boot_confirm_pending = ota_state.boot_pending_exists()
+        ota_boot_confirm_after_ms = time.ticks_add(
+            now_ms, OTA_BOOT_CONFIRM_DELAY_MS
+        )
         ota_preparation_handled = False
 
         while True:
             now_ms = time.ticks_ms()
+
+            if (
+                ota_boot_confirm_pending
+                and not ota_boot_confirmed
+                and not SIMULATE_NO_BOOT_CONFIRM
+                and time.ticks_diff(now_ms, ota_boot_confirm_after_ms) >= 0
+            ):
+                if ota_state.confirm_boot_success():
+                    print("OTA : nouvelle version stable")
+                else:
+                    print("OTA : confirmation OTA non disponible")
+                ota_boot_confirm_pending = False
+                ota_boot_confirmed = True
+
             force_schedule_realign = False
             wifi_manager.update(now_ms)
             synced = time_manager.update(

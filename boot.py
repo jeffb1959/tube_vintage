@@ -5,7 +5,33 @@ print("tube_vintage : demarrage")
 try:
     import ota_state
 
-    if ota_state.install_pending_exists():
+    if ota_state.boot_pending_exists():
+        try:
+            marker = ota_state.load_boot_pending()
+            print("OTA : demarrage de la nouvelle version a confirmer")
+            if marker is None:
+                ota_state.remove_boot_pending()
+            else:
+                updated_marker = ota_state.increment_boot_attempt(marker)
+                if updated_marker is None:
+                    ota_state.remove_boot_pending()
+                else:
+                    attempts = updated_marker.get("boot_attempts")
+                    max_attempts = updated_marker.get("max_boot_attempts")
+                    if isinstance(attempts, int) and isinstance(max_attempts, int):
+                        print(
+                            "OTA : tentative de demarrage "
+                            + str(attempts)
+                            + " / "
+                            + str(max_attempts)
+                        )
+                        if attempts > max_attempts:
+                            import ota_rollback
+
+                            ota_rollback.run()
+        except Exception as boot_error:
+            print("OTA rollback : erreur de demarrage : " + str(boot_error))
+    elif ota_state.install_pending_exists():
         try:
             import ota_installer
 
