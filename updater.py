@@ -32,6 +32,8 @@ UPDATE_LOCK_RETRY_DELAY_MS = 5 * 1000
 UPDATE_DELAY_AFTER_SUN_MS = 30 * 1000
 DOWNLOAD_FILE_GAP_MS = 10 * 1000
 DOWNLOAD_BLOCK_SIZE = 1024
+DOWNLOAD_PROGRESS_INTERVAL_BYTES = 16 * 1024
+DOWNLOAD_SOCKET_TIMEOUT_SECONDS = 20
 DOWNLOAD_SPACE_MARGIN_BYTES = 4096
 SUPPORTED_MANIFEST_VERSION = 1
 
@@ -413,26 +415,43 @@ def _download_next_file(now_ms):
         if not callable(read_chunk):
             raise RuntimeError("lecture HTTP en flux indisponible")
 
+        set_timeout = getattr(stream, "settimeout", None)
+        if callable(set_timeout):
+            try:
+                set_timeout(DOWNLOAD_SOCKET_TIMEOUT_SECONDS)
+            except Exception:
+                pass
+
         received_bytes = 0
+        expected_size = file_entry["size"]
+        next_progress_bytes = DOWNLOAD_PROGRESS_INTERVAL_BYTES
         hasher = hashlib.sha256()
         output_file = open(target_path, "wb")
-        while True:
-            chunk = read_chunk(DOWNLOAD_BLOCK_SIZE)
+        while received_bytes < expected_size:
+            remaining_bytes = expected_size - received_bytes
+            read_size = min(DOWNLOAD_BLOCK_SIZE, remaining_bytes)
+            chunk = read_chunk(read_size)
             if not chunk:
-                break
+                raise RuntimeError("taille invalide : flux tronque")
             if not isinstance(chunk, (bytes, bytearray)):
                 raise RuntimeError("bloc HTTP invalide")
+            if len(chunk) > read_size:
+                raise RuntimeError("taille invalide")
             output_file.write(chunk)
             hasher.update(chunk)
             received_bytes += len(chunk)
-            if received_bytes > file_entry["size"]:
-                raise RuntimeError("taille invalide")
+            while received_bytes >= next_progress_bytes:
+                print(
+                    "Mise a jour : %d / %d octets"
+                    % (next_progress_bytes, expected_size)
+                )
+                next_progress_bytes += DOWNLOAD_PROGRESS_INTERVAL_BYTES
 
         output_file.close()
         output_file = None
         calculated_sha256 = _sha256_hex(hasher)
         print("Mise a jour : %d octets recus" % received_bytes)
-        if received_bytes != file_entry["size"]:
+        if received_bytes != expected_size:
             raise RuntimeError("taille invalide")
         print("Mise a jour : taille valide")
         if calculated_sha256 != file_entry["sha256"]:
