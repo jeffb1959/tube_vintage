@@ -1,169 +1,140 @@
 # tube_vintage
 
-## Correction 3.0.0.1
+## Phase 3.0.1
 
-Cette phase ajoute une premiere verification de version depuis un manifeste
-statique publie sur Netlify. L'ESP32 consulte et valide `version.json`, compare
-sa version locale a la version distante et indique si une mise a jour existe.
+Cette phase telecharge les fichiers d'une mise a jour Netlify vers des fichiers
+temporaires `<nom>.new`. Aucun fichier actif n'est remplace, aucun `.bak` n'est
+cree et l'ESP32 ne redemarre pas.
 
-Aucun fichier de programme n'est telecharge, ecrit, renomme ou installe dans
-cette phase. Aucun redemarrage n'est effectue.
+La version locale reste `3.0.0` dans `main_tempo.py`. Le manifeste de test
+annonce `3.0.1`, ce qui permet de valider le telechargement sans inclure ni
+remplacer `main_tempo.py`.
 
-## Configuration Netlify
+## Manifeste Netlify
 
-L'URL technique se trouve dans `updater.py` :
+`netlify/version.json` peut lister un seul fichier ou plusieurs fichiers. Seuls
+les fichiers effectivement presents dans `files` sont traites. Chaque entree
+exige :
 
-```python
-VERSION_MANIFEST_URL = "https://votre-site.netlify.app/version.json"
+- `name` : nom simple, non vide et sans chemin;
+- `url` : URL HTTPS non vide;
+- `size` : taille exacte, entiere et strictement positive;
+- `sha256` : empreinte hexadecimale complete de 64 caracteres.
+
+Les doublons, `..`, les chemins absolus, les barres obliques, les sous-dossiers
+et les noms terminant par `.new` ou `.bak` sont refuses. Sont egalement refuses
+les secrets, l'etat temporel, les marqueurs internes et les fichiers locaux npm,
+Git ou VS Code, notamment :
+
+- `wifi_secrets.py`;
+- `time_state.json`;
+- `.gitignore`;
+- `package.json` et `package-lock.json`;
+- `pyrightconfig.json`;
+- `netlify.toml`.
+
+Les fichiers `.txt` de test sont autorises. Dans une future version,
+`config.py` pourra etre le seul fichier du manifeste et etre mis a jour seul.
+
+## Telechargement en flux
+
+`updater.py` lit chaque reponse HTTPS depuis `response.raw` par blocs de
+1024 octets. Chaque bloc est immediatement :
+
+1. ecrit dans `<nom>.new`;
+2. ajoute au compteur de taille;
+3. transmis au calcul SHA-256 progressif.
+
+Le fichier complet n'est jamais charge en RAM. La reponse HTTP, le flux et le
+fichier local sont fermes dans tous les chemins, puis le verrou reseau est
+libere et `gc.collect()` est appele. Si la reponse MicroPython ne fournit pas de
+flux brut lisible, le telechargement echoue proprement.
+
+Avant la tentative, `os.statvfs()` est utilise lorsqu'il est disponible. La
+somme des tailles annoncees et une marge de 4096 octets doivent etre libres.
+Une erreur d'ecriture reste geree si cette fonction n'existe pas.
+
+## Validation et atomicite
+
+Apres chaque fichier, la taille recue doit correspondre exactement a `size` et
+le SHA-256 calcule doit correspondre au manifeste. Un fichier valide est garde
+sous son nom `.new`, sans etre charge ou importe.
+
+La tentative est atomique pour tout le lot : si un seul fichier echoue, le
+fichier incomplet et tous les `.new` deja valides pendant cette tentative sont
+supprimes. Les fichiers actifs ne sont jamais touches. Une nouvelle tentative
+est planifiee une heure plus tard, sans boucle rapide.
+
+Lorsque tous les fichiers sont valides, tous les `.new` sont conserves et l'etat
+RAM indique que le lot est complet. Aucune installation n'est effectuee.
+
+## Coordination reseau et memoire
+
+Open-Meteo garde la priorite. Netlify attend 60 secondes apres connexion et au
+moins 30 secondes apres une tentative solaire. Le verrou partage
+`network_request_lock.py` interdit deux requetes HTTPS simultanees et impose
+10 secondes entre deux fichiers. Les diagnostics affichent la memoire libre
+avant et apres chaque telechargement, le nombre total d'octets et la validation
+SHA-256, sans imprimer chaque bloc.
+
+## Fichiers de test
+
+- `netlify/firmware/update_test_small.txt` : petit contenu reconnaissable;
+- `netlify/firmware/update_test_large.txt` : fichier deterministe de 65 536
+  octets pour tester le flux et la memoire.
+
+Ces fichiers sont inertes : ils ne sont jamais importes ou executes.
+
+## Generation locale du manifeste
+
+Depuis Windows, a la racine du projet :
+
+```powershell
+python tools\generate_manifest.py
 ```
 
-Remplacer explicitement `votre-site.netlify.app` par le domaine Netlify reel
-avant le deploiement. Cette URL ne doit pas etre placee dans `config.py`.
-
-Le dossier local `netlify/` prepare la future publication :
-
-```text
-netlify/
-|-- version.json
-|-- README.md
-`-- firmware/
-    `-- README.md
-```
-
-## Manifeste
-
-L'exemple `netlify/version.json` contient :
-
-```json
-{
-  "manifest_version": 1,
-  "version": "3.0.0",
-  "files": [
-    {
-      "name": "main.py",
-      "url": "https://votre-site.netlify.app/firmware/main.py",
-      "size": 0,
-      "sha256": ""
-    },
-    {
-      "name": "config.py",
-      "url": "https://votre-site.netlify.app/firmware/config.py",
-      "size": 0,
-      "sha256": ""
-    }
-  ]
-}
-```
-
-Pour cette phase, `manifest_version` doit valoir `1`, `version` doit etre une
-version numerique valide et `files`, si present, doit etre une liste de
-dictionnaires. `size` et `sha256` ne sont pas encore verifies.
-
-## Verification et comparaison
-
-Apres une nouvelle connexion Wi-Fi, `updater.py` attend 60 secondes avec une
-echeance monotone avant de consulter Netlify. La premiere verification attend
-egalement qu'une tentative Open-Meteo soit terminee depuis au moins 30 secondes.
-Ce fonctionnement impose l'ordre Wi-Fi, NTP, Open-Meteo, puis Netlify sans
-utiliser de long `sleep`.
-
-`sun_manager.py` et `updater.py` partagent le verrou non bloquant
-`network_request_lock.py`. Une seule requete HTTPS peut le posseder. Sa
-liberation est garantie dans un bloc `finally` et impose ensuite 10 secondes de
-repos avant une autre requete. Si le verrou est indisponible, le gestionnaire
-attend 5 secondes sans bloquer les LED.
-
-Pour reduire la pression memoire, chaque requete appelle `gc.collect()` juste
-avant son ouverture et apres la fermeture de la reponse et l'abandon du JSON
-complet. Les diagnostics temporaires affichent, lorsque `gc.mem_free()` est
-disponible :
-
-```text
-Memoire libre avant Soleil : ...
-Memoire libre apres Soleil : ...
-Memoire libre avant Mise a jour : ...
-Memoire libre apres Mise a jour : ...
-```
-
-- apres une verification reussie, la suivante est planifiee dans 24 heures;
-- apres un echec reseau, HTTP ou JSON, un nouvel essai est planifie dans une
-  heure;
-- la reponse HTTP est fermee dans tous les cas;
-- tout l'etat reste uniquement en RAM.
-
-Les versions sont converties en trois entiers `(majeur, mineur, correctif)` et
-ne sont jamais comparees comme de simples chaines. Ainsi `3.0.10` est bien
-superieur a `3.0.9`. Une version incomplete, non numerique ou comportant un
-nombre different de composantes invalide le manifeste.
-
-Une version distante superieure est seulement annoncee et memorisee en RAM.
-Les LED, le bouton, les profils et tous les gestionnaires continuent leur
-fonctionnement normal.
+Le script recree les deux fichiers de test, calcule leur taille et leur SHA-256
+par blocs, puis regenere `netlify/version.json` avec les URL du site
+`tube-vintage-jeff.netlify.app`.
 
 ## Diagnostic depuis Thonny
 
-Pour rendre la prochaine verification immediate lorsque le Wi-Fi est connecte :
+La verification du manifeste reste forcable avec :
 
 ```python
 import updater
 updater.force_check()
 ```
 
-Pour consulter l'etat en RAM :
+Lorsqu'une version plus recente et un manifeste valide sont connus, le
+telechargement est prepare automatiquement. Il peut aussi etre relance
+manuellement, sans installation :
+
+```python
+updater.start_download()
+```
+
+Etat lisible du telechargement :
+
+```python
+updater.get_download_state()
+```
+
+Etat complet de l'updater :
 
 ```python
 updater.get_state()
 ```
 
-Cette commande ne change pas la version locale et ne telecharge aucun fichier.
-
-## Futur perimetre des mises a jour
-
-Le manifeste pourra inclure les modules fonctionnels du projet, notamment :
-
-- `main.py`;
-- `config.py`;
-- `wifi_manager.py`;
-- `time_manager.py`;
-- `time_safety.py`;
-- `schedule_manager.py`;
-- `sun_manager.py`;
-- `night_profile_manager.py`;
-- `updater.py`;
-- tout autre module fonctionnel publie avec le micrologiciel.
-
-`config.py` fera volontairement partie des futures mises a jour. Les reglages
-locaux qu'il contient pourront donc etre remplaces par une version distante.
-
-Les elements suivants ne devront jamais etre remplaces par Netlify :
-
-- `wifi_secrets.py`;
-- `time_state.json`;
-- les fichiers temporaires `.new`;
-- les sauvegardes `.bak`;
-- les marqueurs internes de mise a jour;
-- les fichiers locaux de developpement;
-- `.gitignore`;
-- `package.json` et `package-lock.json`;
-- `pyrightconfig.json`;
-- le dossier `.vscode`;
-- le dossier `node_modules`.
-
 ## Fonctionnement existant conserve
 
-- ESP32 DevKit V1, cinq LED WS2812 sur GPIO 5 et bouton sur GPIO 27;
-- quatre profils visuels et passage automatique temporaire a `NUIT`;
-- Wi-Fi non bloquant et synchronisation NTP toutes les 6 heures;
-- heure locale du Quebec et horaire automatique de 06:00 a 00:00;
-- securite temporelle et grace de 72 heures;
-- recuperation quotidienne du coucher du soleil par Open-Meteo;
-- Ctrl+C et les exceptions eteignent proprement les LED.
-
-La version locale reste definie dans `main_tempo.py` :
-
-```python
-PROGRAM_VERSION = "3.0.0"
-```
+- cinq LED WS2812 sur GPIO 5 et bouton sur GPIO 27;
+- quatre profils, animations et profil `NUIT` automatique;
+- Wi-Fi non bloquant, NTP et heure locale du Quebec;
+- horaire automatique de 06:00 a 00:00;
+- securite et grace temporelles de 72 heures;
+- recuperation quotidienne du coucher du soleil;
+- extinction propre sur Ctrl+C et exception.
 
 ## Demarrage dans Thonny
 

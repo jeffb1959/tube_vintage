@@ -3,16 +3,16 @@
   "version": "3.0.1",
   "files": [
     {
-      "name": "main.py",
-      "url": "https://votre-site.netlify.app/firmware/main.py",
-      "size": 0,
-      "sha256": ""
+      "name": "update_test_small.txt",
+      "url": "https://tube-vintage-jeff.netlify.app/firmware/update_test_small.txt",
+      "size": 47,
+      "sha256": "cadc0f4bd5f798181999e5fffb1b73f4120ee95e48886e6bdefee6e2a9665ca9"
     },
     {
-      "name": "config.py",
-      "url": "https://votre-site.netlify.app/firmware/config.py",
-      "size": 0,
-      "sha256": ""
+      "name": "update_test_large.txt",
+      "url": "https://tube-vintage-jeff.netlify.app/firmware/update_test_large.txt",
+      "size": 65536,
+      "sha256": "9d7ea698f1fec4d98ec3fc69a897b009113be8a032b7c6585de47421382de6f1"
     }
   ]
 }

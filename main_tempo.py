@@ -373,7 +373,7 @@ def main():
 
     try:
         print("Version :", PROGRAM_VERSION)
-        print("Phase : 3.0.0")
+        print("Phase : 3.0.1")
         print("Broche DATA : GPIO", DATA_PIN)
         print("Nombre de LED :", LED_COUNT)
         print("Bouton : GPIO", BUTTON_PIN)
