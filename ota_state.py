@@ -44,7 +44,6 @@ FORBIDDEN_FILENAMES = (
     ROLLBACK_DONE_TEMP_FILE,
     FAILED_VERSION_FILE,
     FAILED_VERSION_TEMP_FILE,
-    "main.py",
     "config.py",
     "boot.py",
     ".gitignore",
@@ -53,6 +52,7 @@ FORBIDDEN_FILENAMES = (
     "pyrightconfig.json",
     "netlify.toml",
 )
+ALLOWED_PYTHON_FILES = ("main.py",)
 
 
 def _remove_if_present(path):
@@ -118,7 +118,9 @@ def is_installable_name(name):
         return False
     if lower_name in FORBIDDEN_FILENAMES:
         return False
-    if lower_name.startswith("ota_") or lower_name.endswith(".py"):
+    if lower_name.startswith("ota_"):
+        return False
+    if lower_name.endswith(".py") and lower_name not in ALLOWED_PYTHON_FILES:
         return False
     if lower_name.startswith(("npm-", "git-", "vscode-", "update_marker")):
         return False

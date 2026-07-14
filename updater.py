@@ -34,7 +34,6 @@ FORBIDDEN_FILENAMES = (
     "ota_install_ready.json",
     "ota_install_ready.tmp",
     "time_state.tmp",
-    "main.py",
     "config.py",
     "boot.py",
     ".gitignore",
@@ -45,6 +44,7 @@ FORBIDDEN_FILENAMES = (
     "ota_failed_version.json",
     "ota_failed_version.tmp",
 )
+ALLOWED_PYTHON_FILES = ("main.py",)
 
 
 _state = {
@@ -116,7 +116,9 @@ def _is_safe_filename(name):
         return False
     if lower_name in FORBIDDEN_FILENAMES:
         return False
-    if lower_name.startswith("ota_") or lower_name.endswith(".py"):
+    if lower_name.startswith("ota_"):
+        return False
+    if lower_name.endswith(".py") and lower_name not in ALLOWED_PYTHON_FILES:
         return False
     if lower_name.startswith(("npm-", "git-", "vscode-", "update_marker")):
         return False
