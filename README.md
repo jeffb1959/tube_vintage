@@ -1,9 +1,9 @@
 # tube_vintage
 
-## Correction 3.0.1.3
+## Correction 3.0.1.4
 
 Les fichiers OTA ne sont plus telecharges dans la boucle complete de
-`main_tempo.py`. Lorsque `updater.py` detecte une version distante superieure,
+`main.py`. Lorsque `updater.py` detecte une version distante superieure,
 l'application sauvegarde le profil utilisateur, cree un marqueur persistant,
 eteint les LED et redemarre vers un environnement OTA minimal.
 
@@ -23,8 +23,8 @@ Avant le redemarrage OTA, `runtime_state.py` ecrit atomiquement
 ```
 
 La valeur sauvegardee est toujours le vrai profil choisi avec le bouton, meme
-si le profil effectif est temporairement `NUIT`. Au prochain lancement manuel
-de `main_tempo.py`, le profil est restaure s'il existe encore dans
+si le profil effectif est temporairement `NUIT`. Au prochain lancement de
+`main.py`, le profil est restaure s'il existe encore dans
 `config.PROFILES`; sinon le profil par defaut de `config.py` est utilise.
 
 ## Marqueur OTA
@@ -57,8 +57,10 @@ positive, SHA-256 complet et absence de doublons.
 `boot.py` cherche uniquement le marqueur OTA :
 
 - s'il existe, `ota_downloader.py` est importe et execute;
-- sinon, le demarrage de developpement actuel est conserve et
-  `main_tempo.py` n'est pas lance automatiquement.
+- sinon, `boot.py` se termine et MicroPython lance automatiquement `main.py`.
+
+`boot.py` n'importe pas et n'execute pas explicitement `main.py`. Le lancement
+normal reste assure par le fonctionnement natif de MicroPython.
 
 Le mode minimal n'importe ni l'application LED, ni les profils, ni l'horaire,
 ni NTP, ni Open-Meteo, ni la logique nocturne. Il charge seulement le Wi-Fi, les
@@ -120,6 +122,10 @@ horaire 06:00-00:00, Wi-Fi, NTP, securite temporelle, Open-Meteo et profil
 
 ## Lancement de developpement dans Thonny
 
+Apres une mise sous tension ou un redemarrage, `main.py` demarre normalement
+de facon automatique. Apres une interruption manuelle au REPL, il est encore
+possible de le relancer avec :
+
 ```python
-exec(open("main_tempo.py").read())
+exec(open("main.py").read())
 ```
