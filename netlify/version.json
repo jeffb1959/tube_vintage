@@ -1,18 +1,12 @@
 {
   "manifest_version": 1,
-  "version": "3.0.8",
+  "version": "3.0.4",
   "files": [
     {
-      "name": "install_test_small.txt",
-      "url": "https://tube-vintage-jfb.netlify.app/firmware/update_test_small.txt",
-      "size": 47,
-      "sha256": "cadc0f4bd5f798181999e5fffb1b73f4120ee95e48886e6bdefee6e2a9665ca9"
-    },
-    {
-      "name": "install_test_large.txt",
-      "url": "https://tube-vintage-jfb.netlify.app/firmware/update_test_large.txt",
-      "size": 65536,
-      "sha256": "9d7ea698f1fec4d98ec3fc69a897b009113be8a032b7c6585de47421382de6f1"
+      "name": "main.py",
+      "url": "https://tube-vintage-jfb.netlify.app/firmware/main.py",
+      "size": 26578,
+      "sha256": "e5ae04d123cde09f36d8e3acc44a2db9234b603a75e3779931e9535cd1af614a"
     }
   ]
 }

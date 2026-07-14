@@ -214,7 +214,8 @@ def _check_manifest(now_ms):
 
         _state["remote_version"] = manifest["version"]
         _state["manifest_files"] = manifest["files"]
-        if ota_state.is_failed_version(manifest["version"]):
+        is_failed = ota_state.is_failed_version(manifest["version"])
+        if is_failed:
             print(
                 "Mise a jour : version "
                 + manifest["version"]
@@ -230,7 +231,7 @@ def _check_manifest(now_ms):
         _state["next_check_ms"] = time.ticks_add(now_ms, UPDATE_CHECK_INTERVAL_MS)
         print("Mise a jour : version locale " + _state["local_version"])
         print("Mise a jour : version distante " + manifest["version"])
-        if comparison > 0:
+        if comparison > 0 and not is_failed:
             print("Mise a jour : nouvelle version " + manifest["version"] + " disponible")
         else:
             print("Mise a jour : aucune mise a jour disponible")
