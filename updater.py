@@ -29,7 +29,14 @@ FORBIDDEN_FILENAMES = (
     "ota_download_pending.tmp",
     "ota_download_ready.json",
     "ota_download_ready.tmp",
+    "ota_install_pending.json",
+    "ota_install_pending.tmp",
+    "ota_install_ready.json",
+    "ota_install_ready.tmp",
     "time_state.tmp",
+    "main.py",
+    "config.py",
+    "boot.py",
     ".gitignore",
     "package.json",
     "package-lock.json",
@@ -106,6 +113,8 @@ def _is_safe_filename(name):
     if lower_name.startswith(".") or lower_name.endswith((".new", ".bak")):
         return False
     if lower_name in FORBIDDEN_FILENAMES:
+        return False
+    if lower_name.startswith("ota_") or lower_name.endswith(".py"):
         return False
     if lower_name.startswith(("npm-", "git-", "vscode-", "update_marker")):
         return False

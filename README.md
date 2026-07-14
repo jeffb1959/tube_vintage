@@ -1,36 +1,75 @@
 # tube_vintage
 
-## Correction 3.0.1.4
+## Phase 3.0.2
 
-Les fichiers OTA ne sont plus telecharges dans la boucle complete de
-`main.py`. Lorsque `updater.py` detecte une version distante superieure,
-l'application sauvegarde le profil utilisateur, cree un marqueur persistant,
-eteint les LED et redemarre vers un environnement OTA minimal.
+Le flux OTA est maintenant en deux temps :
 
-Aucun fichier actif n'est remplace, aucun `.bak` n'est cree et aucun fichier
-`.new` n'est installe dans cette phase.
+- Téléchargement vers des fichiers `.new` en environnement minimal ;
+- Installation minimale ensuite, après redémarrage, pour convertir `.new` en fichiers finaux avec sauvegarde `.bak`.
 
-## Profil utilisateur persistant
+La version de l'application ne bascule pas encore automatiquement avec confirmation de démarrage ni rollback automatique après redémarrage.
 
-Avant le redemarrage OTA, `runtime_state.py` ecrit atomiquement
-`runtime_state.json` via `runtime_state.tmp` :
+## Manifeste Netlify
+
+Le manifeste référence des fichiers locaux destinés aux tests OTA :
+
+- `install_test_small.txt` provient de `update_test_small.txt`
+- `install_test_large.txt` provient de `update_test_large.txt`
+
+Exemple de structure :
 
 ```json
 {
-  "version": 1,
-  "user_profile": "CALME"
+  "manifest_version": 1,
+  "version": "3.0.6",
+  "files": [
+    {
+      "name": "install_test_small.txt",
+      "url": "https://tube-vintage-jfb.netlify.app/firmware/update_test_small.txt",
+      "size": 47,
+      "sha256": "cadc0f4bd5f798181999e5fffb1b73f4120ee95e48886e6bdefee6e2a9665ca9"
+    },
+    {
+      "name": "install_test_large.txt",
+      "url": "https://tube-vintage-jfb.netlify.app/firmware/update_test_large.txt",
+      "size": 65536,
+      "sha256": "9d7ea698f1fec4d98ec3fc69a897b009113be8a032b7c6585de47421382de6f1"
+    }
+  ]
 }
 ```
 
-La valeur sauvegardee est toujours le vrai profil choisi avec le bouton, meme
-si le profil effectif est temporairement `NUIT`. Au prochain lancement de
-`main.py`, le profil est restaure s'il existe encore dans
-`config.PROFILES`; sinon le profil par defaut de `config.py` est utilise.
+Les fichiers distants sont téléchargés sous `name + ".new"` :
 
-## Marqueur OTA
+- `install_test_small.txt.new`
+- `install_test_large.txt.new`
 
-`updater.py` valide le manifeste, mais ne telecharge plus ses fichiers. Il cree
-atomiquement `ota_download_pending.json` via `ota_download_pending.tmp` :
+## Démarrage OTA au boot
+
+`boot.py` applique désormais la priorité :
+
+1. Si `ota_install_pending.json` existe : lancer `ota_installer.py` ;
+2. Sinon si `ota_download_pending.json` existe : lancer `ota_downloader.py` ;
+3. Sinon : laisser le démarrage normal de MicroPython (`main.py`).
+
+Pendant un cycle installateur, `main.py` n’est pas lancé manuellement.
+
+## Marqueurs
+
+### `ota_download_pending.json` (téléchargement)
+
+Créé par `updater.py` après détection d’une version plus récente.
+
+### `ota_install_pending.json` (installation)
+
+Créé par `ota_downloader.py` uniquement après :
+
+- téléchargement réussi,
+- validation de la taille,
+- validation SHA-256,
+- présence des `.new`.
+
+Format minimal requis :
 
 ```json
 {
@@ -38,94 +77,101 @@ atomiquement `ota_download_pending.json` via `ota_download_pending.tmp` :
   "remote_version": "3.0.6",
   "files": [
     {
-      "name": "update_test_small.txt",
-      "url": "https://example.netlify.app/firmware/update_test_small.txt",
-      "size": 47,
-      "sha256": "empreinte-hexadecimale-de-64-caracteres"
+      "name": "install_test_small.txt"
+    },
+    {
+      "name": "install_test_large.txt"
     }
-  ],
-  "attempts": 0
-}
-```
-
-Le marqueur contient toutes les donnees necessaires au telechargeur minimal. Il
-est revalide apres redemarrage : noms simples sans chemin, URL HTTPS, taille
-positive, SHA-256 complet et absence de doublons.
-
-## Selection au demarrage
-
-`boot.py` cherche uniquement le marqueur OTA :
-
-- s'il existe, `ota_downloader.py` est importe et execute;
-- sinon, `boot.py` se termine et MicroPython lance automatiquement `main.py`.
-
-`boot.py` n'importe pas et n'execute pas explicitement `main.py`. Le lancement
-normal reste assure par le fonctionnement natif de MicroPython.
-
-Le mode minimal n'importe ni l'application LED, ni les profils, ni l'horaire,
-ni NTP, ni Open-Meteo, ni la logique nocturne. Il charge seulement le Wi-Fi, les
-secrets locaux, HTTP, SHA-256 et les petits modules d'etat OTA.
-
-## Telechargement minimal
-
-`ota_downloader.py` reutilise la methode validee par le test de vitesse :
-
-- bloc de 1024 octets;
-- tampon unique et `readinto()` prioritaire;
-- repli sur `read()`;
-- `Accept-Encoding: identity` et `Connection: close`;
-- arret exact a la taille annoncee, sans lecture d'EOF supplementaire;
-- ecriture `.new` et SHA-256 progressifs;
-- progression console tous les 16 Kio;
-- fermeture systematique et `gc.collect()`.
-
-Tous les fichiers doivent etre valides. Une seule erreur supprime tous les
-`.new` du lot. En cas de succes, les `.new` sont conserves et le marqueur
-atomique `ota_download_ready.json` contient :
-
-```json
-{
-  "version": 1,
-  "remote_version": "3.0.6",
-  "files": [
-    "update_test_small.txt.new",
-    "update_test_large.txt.new"
   ]
 }
 ```
 
-Le marqueur en attente est alors supprime et l'ESP32 redemarre. Aucune
-installation n'est effectuee.
+### `ota_install_ready.json` (optionnel)
 
-## Limite d'echecs
+Créé après installation réussie.
 
-Le compteur `attempts` est incremente atomiquement avant chaque tentative. Une
-erreur nettoie tous les `.new`, conserve une erreur courte et redemarre pour un
-nouvel essai. Apres trois echecs, le marqueur en attente est supprime et le
-systeme revient au demarrage normal, sans installation et sans boucle infinie.
+## Module `ota_installer.py`
 
-## Fichiers toujours exclus des mises a jour
+`ota_installer.py` est minimal et ne dépend que de :
 
-- `wifi_secrets.py`;
-- `time_state.json` et `time_state.tmp`;
-- `runtime_state.json` et `runtime_state.tmp`;
-- `ota_download_pending.json` et son temporaire;
-- `ota_download_ready.json` et son temporaire;
-- tous les `.new` et `.bak`;
-- les marqueurs internes, fichiers npm, Git, VS Code et outils locaux.
+- `os`
+- `time`
+- `machine`
+- `ota_state` (lecture/écriture marqueurs, validation noms)
 
-## Fonctionnement conserve
+### Comportement d’installation
 
-La version locale reste `3.0.0`. Les profils, valeurs visuelles, bouton,
-horaire 06:00-00:00, Wi-Fi, NTP, securite temporelle, Open-Meteo et profil
-`NUIT` automatique ne sont pas modifies.
+Pour chaque nom de fichier du marqueur :
 
-## Lancement de developpement dans Thonny
+1. vérification préalable de `<name>.new` ;
+2. suppression d’un `.bak` existant uniquement dans le flux contrôlé de test ;
+3. sauvegarde de `<name>` en `<name>.bak` si présent ;
+4. remplacement de `<name>.new` vers `<name>` ;
+5. journalisation des étapes pour restauration.
 
-Apres une mise sous tension ou un redemarrage, `main.py` demarre normalement
-de facon automatique. Apres une interruption manuelle au REPL, il est encore
-possible de le relancer avec :
+En cas d’échec :
 
-```python
-exec(open("main.py").read())
-```
+- arrêt immédiat ;
+- restauration de toutes les opérations déjà réalisées (ordre inverse) ;
+- nettoyage des `.new` ;
+- suppression des marqueurs d’installation ;
+- redémarrage vers `main.py`.
+
+### Simulation d’échec
+
+Un drapeau de diagnostic est présent dans `ota_installer.py` :
+
+`INSTALL_TEST_FAIL_ON_INDEX = 1`
+
+- `None` par défaut (mode normal)
+- `1` provoque une erreur au second fichier pour valider la restauration.
+
+## Fichiers interdits aux fichiers installables
+
+La validation bloque :
+
+- `wifi_secrets.py`
+- `time_state.json`
+- `runtime_state.json`
+- `ota_download_pending.json`
+- `ota_download_ready.json`
+- `ota_install_pending.json`
+- `ota_install_ready.json`
+- tous les `.new`
+- tous les `.bak`
+- marqueurs internes OTA
+- profils/ressources actives (ex. `main.py`, `config.py`, `boot.py`) et fichiers de développement.
+
+## Tests de base à documenter
+
+### Test 1 : installation réussie
+
+1. Créer manuellement sur l’ESP32 :
+   - `install_test_small.txt` avec `ANCIEN CONTENU PETIT`
+   - `install_test_large.txt` avec `ANCIEN CONTENU GROS`
+2. Lancer la mise à jour OTA (téléchargement + redémarrage).
+3. Vérifier après retour :
+   - `install_test_small.txt` contient le nouveau contenu,
+   - `install_test_small.txt.bak` contient `ANCIEN CONTENU PETIT`,
+   - `install_test_large.txt` contient le nouveau contenu,
+   - `install_test_large.txt.bak` contient `ANCIEN CONTENU GROS`,
+   - aucun `.new` résiduel.
+
+### Test 2 : échec simulé sur le second fichier
+
+1. Réinitialiser les anciens contenus.
+2. Activer `INSTALL_TEST_FAIL_ON_INDEX = 1` dans `ota_installer.py`.
+3. Relancer le cycle.
+4. Vérifier :
+   - le premier fichier revenu à son ancien contenu,
+   - le second fichier non mélangé (ancien contenu maintenu),
+   - aucun `.new`/final incorrect,
+   - retour correct vers `main.py`.
+
+## Comportements conservés en phase 3.0.2
+
+- `main.py`, `config.py`, modules actifs, Wi-Fi/NTP/LED/profil logique, modules solaires et logique horaire ne sont pas modifiés pour l’OTA.
+- pas de confirmation de démarrage,
+- pas de compteur de redémarrages de version,
+- pas d’effacement automatique des `.bak`,
+- pas de remplacement réel de `main.py` / `config.py`.

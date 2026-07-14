@@ -8,6 +8,10 @@ PENDING_FILE = "ota_download_pending.json"
 PENDING_TEMP_FILE = "ota_download_pending.tmp"
 READY_FILE = "ota_download_ready.json"
 READY_TEMP_FILE = "ota_download_ready.tmp"
+INSTALL_PENDING_FILE = "ota_install_pending.json"
+INSTALL_PENDING_TEMP_FILE = "ota_install_pending.tmp"
+INSTALL_READY_FILE = "ota_install_ready.json"
+INSTALL_READY_TEMP_FILE = "ota_install_ready.tmp"
 
 FORBIDDEN_FILENAMES = (
     "wifi_secrets.py",
@@ -19,6 +23,18 @@ FORBIDDEN_FILENAMES = (
     PENDING_TEMP_FILE,
     READY_FILE,
     READY_TEMP_FILE,
+    INSTALL_PENDING_FILE,
+    INSTALL_PENDING_TEMP_FILE,
+    INSTALL_READY_FILE,
+    INSTALL_READY_TEMP_FILE,
+    "main.py",
+    "config.py",
+    "boot.py",
+    ".gitignore",
+    "package.json",
+    "package-lock.json",
+    "pyrightconfig.json",
+    "netlify.toml",
 )
 
 
@@ -49,6 +65,14 @@ def pending_exists():
         return False
 
 
+def install_pending_exists():
+    try:
+        os.stat(INSTALL_PENDING_FILE)
+        return True
+    except OSError:
+        return False
+
+
 def create_pending(remote_version, files):
     data = {
         "version": STATE_VERSION,
@@ -59,13 +83,7 @@ def create_pending(remote_version, files):
     return _write_atomic(PENDING_FILE, PENDING_TEMP_FILE, data)
 
 
-def _valid_file_entry(file_entry):
-    if not isinstance(file_entry, dict):
-        return False
-    name = file_entry.get("name")
-    url = file_entry.get("url")
-    size = file_entry.get("size")
-    sha256 = file_entry.get("sha256")
+def is_installable_name(name):
     if not isinstance(name, str) or not name:
         return False
     lower_name = name.lower()
@@ -74,6 +92,22 @@ def _valid_file_entry(file_entry):
     if lower_name.startswith(".") or lower_name.endswith((".new", ".bak")):
         return False
     if lower_name in FORBIDDEN_FILENAMES:
+        return False
+    if lower_name.startswith("ota_") or lower_name.endswith(".py"):
+        return False
+    if lower_name.startswith(("npm-", "git-", "vscode-", "update_marker")):
+        return False
+    return True
+
+
+def _valid_file_entry(file_entry):
+    if not isinstance(file_entry, dict):
+        return False
+    name = file_entry.get("name")
+    url = file_entry.get("url")
+    size = file_entry.get("size")
+    sha256 = file_entry.get("sha256")
+    if not is_installable_name(name):
         return False
     if not isinstance(url, str) or not url.startswith("https://"):
         return False
@@ -136,6 +170,73 @@ def create_ready(remote_version, new_files):
     return _write_atomic(READY_FILE, READY_TEMP_FILE, data)
 
 
+def create_install_pending(remote_version, files):
+    install_files = []
+    for file_entry in files:
+        if not _valid_file_entry(file_entry):
+            return False
+        install_files.append({"name": file_entry["name"]})
+    data = {
+        "version": STATE_VERSION,
+        "remote_version": remote_version,
+        "files": install_files,
+    }
+    return _write_atomic(
+        INSTALL_PENDING_FILE, INSTALL_PENDING_TEMP_FILE, data
+    )
+
+
+def load_install_pending():
+    try:
+        with open(INSTALL_PENDING_FILE, "r") as marker_file:
+            data = json.load(marker_file)
+        if not isinstance(data, dict) or data.get("version") != STATE_VERSION:
+            return None
+        if not isinstance(data.get("remote_version"), str):
+            return None
+        files = data.get("files")
+        if not isinstance(files, list) or not files:
+            return None
+        seen_names = []
+        for file_entry in files:
+            if not isinstance(file_entry, dict):
+                return None
+            name = file_entry.get("name")
+            if not isinstance(name, str) or not is_installable_name(name):
+                return None
+            lower_name = name.lower()
+            if lower_name in seen_names:
+                return None
+            seen_names.append(lower_name)
+        return data
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def create_install_ready(remote_version, files):
+    data = {
+        "version": STATE_VERSION,
+        "remote_version": remote_version,
+        "files": files,
+    }
+    return _write_atomic(INSTALL_READY_FILE, INSTALL_READY_TEMP_FILE, data)
+
+
 def remove_pending():
     _remove_if_present(PENDING_FILE)
     _remove_if_present(PENDING_TEMP_FILE)
+
+
+def remove_ready():
+    _remove_if_present(READY_FILE)
+    _remove_if_present(READY_TEMP_FILE)
+
+
+def remove_install_pending():
+    _remove_if_present(INSTALL_PENDING_FILE)
+    _remove_if_present(INSTALL_PENDING_TEMP_FILE)
+
+
+def remove_install_ready():
+    _remove_if_present(INSTALL_READY_FILE)
+    _remove_if_present(INSTALL_READY_TEMP_FILE)

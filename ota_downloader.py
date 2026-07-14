@@ -58,6 +58,20 @@ def _cleanup_new_files(files):
                 _remove_if_present(name + ".new")
 
 
+def _all_new_files_present(files):
+    for file_entry in files:
+        if not isinstance(file_entry, dict):
+            return False
+        name = file_entry.get("name")
+        if not isinstance(name, str):
+            return False
+        try:
+            os.stat(name + ".new")
+        except OSError:
+            return False
+    return True
+
+
 def _get_header(response, header_name):
     headers = getattr(response, "headers", None)
     if not isinstance(headers, dict):
@@ -206,8 +220,8 @@ def run():
     memory_free = _memory_free()
     if memory_free is not None:
         print("OTA minimal : memoire libre : " + str(memory_free))
-
     marker = ota_state.load_pending()
+
     if marker is None:
         print("OTA minimal : marqueur invalide, abandon")
         ota_state.remove_pending()
@@ -230,11 +244,20 @@ def run():
         for file_entry in files:
             new_files.append(_download_file(file_entry))
 
+        if not _all_new_files_present(files):
+            raise RuntimeError("fichier .new manquant")
+
         if not ota_state.create_ready(marker["remote_version"], new_files):
             raise RuntimeError("creation du marqueur pret impossible")
+
+        if not ota_state.create_install_pending(marker["remote_version"], files):
+            ota_state.remove_ready()
+            raise RuntimeError("creation du marqueur d'installation impossible")
+
         ota_state.remove_pending()
-        print("OTA minimal : tous les fichiers telecharges et valides")
-        print("OTA minimal : redemarrage vers l'application")
+        print("OTA : tous les fichiers telecharges et valides")
+        print("OTA : marqueur d'installation cree")
+        print("OTA : redemarrage vers l'installateur minimal")
         _restart()
         return True
     except Exception as error:
