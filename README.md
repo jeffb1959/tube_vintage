@@ -1,3 +1,14 @@
+Recette de mise a jour ota: 
+
+1. modifier le main.py officiel;
+2. augmenter PROGRAM_VERSION;
+3. copier le fichier dans netlify/firmware;
+4. mettre à jour REMOTE_VERSION;
+5. lancer python generate_manifest.py;
+6. vérifier version.json;
+7. déployer sur Netlify;
+8. observer la confirmation OTA.
+
 # tube_vintage
 
 ## Phase 3.0.3 — confirmation de démarrage OTA
