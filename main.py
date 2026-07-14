@@ -18,7 +18,7 @@ import ota_state
 
 
 # Informations du programme
-PROGRAM_VERSION = "3.0.0"
+PROGRAM_VERSION = "3.0.4"
 OTA_BOOT_CONFIRM_DELAY_MS = 30 * 1000
 SIMULATE_NO_BOOT_CONFIRM = False
 
@@ -379,8 +379,9 @@ def main():
 
     try:
         print("Version :", PROGRAM_VERSION)
-        print("Phase : 3.0.1.4")
+        print("Phase : 3.0.4")
         print("Broche DATA : GPIO", DATA_PIN)
+        print("Mise a jour applicative OTA 3.0.4 active")
         print("Nombre de LED :", LED_COUNT)
         print("Bouton : GPIO", BUTTON_PIN)
 

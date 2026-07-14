@@ -34,7 +34,6 @@ FORBIDDEN_FILENAMES = (
     "ota_install_ready.json",
     "ota_install_ready.tmp",
     "time_state.tmp",
-    "config.py",
     "boot.py",
     ".gitignore",
     "package.json",
@@ -44,7 +43,10 @@ FORBIDDEN_FILENAMES = (
     "ota_failed_version.json",
     "ota_failed_version.tmp",
 )
-ALLOWED_PYTHON_FILES = ("main.py",)
+ALLOWED_PYTHON_FILES = (
+    "main.py",
+    "config.py",
+)
 
 
 _state = {
