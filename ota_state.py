@@ -19,6 +19,8 @@ UPDATE_CONFIRMED_FILE = "ota_update_confirmed.json"
 UPDATE_CONFIRMED_TEMP_FILE = "ota_update_confirmed.tmp"
 ROLLBACK_DONE_FILE = "ota_rollback_done.json"
 ROLLBACK_DONE_TEMP_FILE = "ota_rollback_done.tmp"
+FAILED_VERSION_FILE = "ota_failed_version.json"
+FAILED_VERSION_TEMP_FILE = "ota_failed_version.tmp"
 
 FORBIDDEN_FILENAMES = (
     "wifi_secrets.py",
@@ -40,6 +42,8 @@ FORBIDDEN_FILENAMES = (
     UPDATE_CONFIRMED_TEMP_FILE,
     ROLLBACK_DONE_FILE,
     ROLLBACK_DONE_TEMP_FILE,
+    FAILED_VERSION_FILE,
+    FAILED_VERSION_TEMP_FILE,
     "main.py",
     "config.py",
     "boot.py",
@@ -359,6 +363,7 @@ def confirm_boot_success():
         marker["files"],
     )
     print("OTA : suppression des sauvegardes .bak terminee")
+    clear_failed_version()
     return True
 
 
@@ -420,3 +425,58 @@ def create_rollback_done(remote_version, error):
         "error": error,
     }
     return _write_atomic(ROLLBACK_DONE_FILE, ROLLBACK_DONE_TEMP_FILE, data)
+
+
+def load_failed_version():
+    try:
+        with open(FAILED_VERSION_FILE, "r") as marker_file:
+            data = json.load(marker_file)
+        if not isinstance(data, dict) or data.get("version") != STATE_VERSION:
+            _remove_if_present(FAILED_VERSION_FILE)
+            _remove_if_present(FAILED_VERSION_TEMP_FILE)
+            return None
+
+        remote_version = data.get("remote_version")
+        reason = data.get("reason")
+        if not isinstance(remote_version, str) or not remote_version:
+            _remove_if_present(FAILED_VERSION_FILE)
+            _remove_if_present(FAILED_VERSION_TEMP_FILE)
+            return None
+        if not isinstance(reason, str) or not reason:
+            _remove_if_present(FAILED_VERSION_FILE)
+            _remove_if_present(FAILED_VERSION_TEMP_FILE)
+            return None
+        return data
+    except (OSError, TypeError, ValueError):
+        _remove_if_present(FAILED_VERSION_FILE)
+        _remove_if_present(FAILED_VERSION_TEMP_FILE)
+        return None
+
+
+def save_failed_version(remote_version, reason):
+    if not isinstance(remote_version, str) or not remote_version:
+        return False
+    if not isinstance(reason, str) or not reason:
+        return False
+    data = {
+        "version": STATE_VERSION,
+        "remote_version": remote_version,
+        "reason": reason,
+    }
+    return _write_atomic(
+        FAILED_VERSION_FILE, FAILED_VERSION_TEMP_FILE, data
+    )
+
+
+def clear_failed_version():
+    _remove_if_present(FAILED_VERSION_FILE)
+    _remove_if_present(FAILED_VERSION_TEMP_FILE)
+
+
+def is_failed_version(remote_version):
+    if not isinstance(remote_version, str):
+        return False
+    marker = load_failed_version()
+    if marker is None:
+        return False
+    return marker.get("remote_version") == remote_version

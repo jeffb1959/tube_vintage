@@ -42,6 +42,8 @@ FORBIDDEN_FILENAMES = (
     "package-lock.json",
     "pyrightconfig.json",
     "netlify.toml",
+    "ota_failed_version.json",
+    "ota_failed_version.tmp",
 )
 
 
@@ -212,8 +214,17 @@ def _check_manifest(now_ms):
 
         _state["remote_version"] = manifest["version"]
         _state["manifest_files"] = manifest["files"]
-        _state["update_available"] = comparison > 0
-        _state["ota_preparation_requested"] = comparison > 0
+        if ota_state.is_failed_version(manifest["version"]):
+            print(
+                "Mise a jour : version "
+                + manifest["version"]
+                + " ignoree car elle a deja echoue au demarrage"
+            )
+            _state["update_available"] = False
+            _state["ota_preparation_requested"] = False
+        else:
+            _state["update_available"] = comparison > 0
+            _state["ota_preparation_requested"] = comparison > 0
         _state["ota_preparation_attempted"] = False
         _state["check_completed"] = True
         _state["next_check_ms"] = time.ticks_add(now_ms, UPDATE_CHECK_INTERVAL_MS)

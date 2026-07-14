@@ -84,6 +84,11 @@ def run():
     try:
         restored_ok = _restore_marker_files(files)
         _cleanup_new_files(files)
+        if restored_ok:
+            if not ota_state.save_failed_version(
+                marker["remote_version"], "boot_not_confirmed"
+            ):
+                print("OTA rollback : impossible de sauvegarder la version rejouee")
         ota_state.remove_boot_pending()
         ota_state.remove_update_confirmed()
         ota_state.remove_install_ready()
